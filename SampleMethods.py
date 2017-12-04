@@ -293,7 +293,7 @@ class SampleMethods:
         :type pss_stratum: int
 
         Created by: Jiaxin Zhang
-        Last modified: 12/03/2017
+        Last modified by: 12/03/2017
         """
 
         # TODO: Jiaxin - Add documentation to this subclass
@@ -318,7 +318,7 @@ class SampleMethods:
             :type pss_stratum: int
 
             Created by: Jiaxin Zhang
-            Last modified: 12/03/2017
+            Last modified by: 12/03/2017
             """
 
             # Check that the PSS design is valid
