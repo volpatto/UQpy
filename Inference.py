@@ -1,6 +1,7 @@
 """Design of Experiment methods. """
 from library import *
 import scipy.stats as stats
+import numpy as np
 from modelist import *
 import os
 import sys
@@ -11,6 +12,11 @@ from scipy.spatial.distance import pdist
 
 
 class Inference:
+
+    def __init__(self, data=None, model=None, method=None):
+        self.method = method
+        self.model = model
+        self.data = data
 
     ########################################################################################################################
     #                                         Information Model Selection - AIC, BIC
@@ -33,9 +39,10 @@ class Inference:
 
             elif model == 'exponential':
                 fitted_params_expon = stats.expon.fit(data)
-                loglike = np.sum(st.expon.logpdf(data, loc=fitted_params_expon[0],scale=fitted_params_expon[1]))
+                loglike = np.sum(stats.expon.logpdf(data, loc=fitted_params_expon[0],scale=fitted_params_expon[1]))
 
             aic_value = 2 * k - 2 * (loglike)
+            print(aic_value)
             self.aic = aic_value
 
 
