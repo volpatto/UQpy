@@ -1,3 +1,4 @@
+"""Design of Experiment methods. """
 from library import *
 import scipy.stats as stats
 from modelist import *
@@ -7,20 +8,35 @@ import copy
 from scipy.spatial.distance import pdist
 
 # this is a new class including
+
+
 class Inference:
 
-    class Parameter_estimation:
+    ########################################################################################################################
+    #                                         Information Model Selection - AIC, BIC
+    ########################################################################################################################
+    class AIC:
 
-    # TODO: parameter estimation
-    # TODO: connjugate priors
-    # TODO: MCMC method using SampleMethods class and Affine invariant MCMC
+        def __init__(self, data=None, model=None):
+            """
+            Created by: Jiaxin Zhang
+            Last modified by: 12/03/2017
+            """
+            k = len(data)
+            if model == 'normal':
+                fitted_params_norm = stats.norm.fit(data)
+                loglike = np.sum(stats.norm.logpdf(data, loc=fitted_params_norm[0],scale=fitted_params_norm[1]))
 
-    class Model_selection:
+            elif model == 'cauchy':
+                fitted_params_cauchy = stats.cauchy.fit(data)
+                loglike = np.sum(stats.cauchy.logpdf(data, loc=fitted_params_cauchy[0],scale=fitted_params_cauchy[1]))
 
-    # TODO:  Bayesian model selection
-    # TODO: information theoretic model selection using AICc
+            elif model == 'exponential':
+                fitted_params_expon = stats.expon.fit(data)
+                loglike = np.sum(st.expon.logpdf(data, loc=fitted_params_expon[0],scale=fitted_params_expon[1]))
 
-    class Multimodel_inference:
+            aic_value = 2 * k - 2 * (loglike)
+            self.aic = aic_value
 
-    # TODO: multimodel inference
+
 
