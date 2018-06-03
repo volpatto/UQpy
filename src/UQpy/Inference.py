@@ -43,37 +43,6 @@ def init_inf(data):
     # Optional:
 
 
-# This is a new class - inference
-# Created by: Jiaxin Zhang (As one of authors or contributors of UQpy?)
-# Author(Contributor???): Jiaxin Zhang
-# Last modified by Dimitris Giovanis: 4/2/2018
-
-# TODO: 16/56 todo list!
-# 1. Information theoretic model selection √
-# 2. Information theoretic multimodel selection √
-# 3. Bayesian parameter estimation - Multimodel
-# 4. Bayesian model selection
-# 5. Bayesian parameter estimation - Conventional MLE
-# 6. Optimal sampling density
-# 7. Copula model selection
-# 8. Copula multimodel selection
-# 9. Copula parameter selection
-# 10. Multimodel kriging??
-
-# 11. Global Sensitivity Analysis (sampling class)
-# 12. Importance sampling (sampling class)
-# 13. Partially Stratified Sampling (sampling class)
-# 14. Latinized Stratifed Sampling (sampling class)
-# 15. Latinized Partially Stratified Sampling (sampling class)
-# 16. Optimal sampling density (sampling or inference class)
-
-# TODO：01-15-2018
-# 1. using sampleMethods MCMC class or Ensemble MCMC
-# 3. Bayesian prior information input
-# 4. Bayesian model selection debug
-# 5. Multimodel information theoretic selection
-# 6. Bayesian parameter estimation - Conventional MLE
-
 ########################################################################################################################
 #                                        Information theoretic model selection - AIC, BIC
 ########################################################################################################################
