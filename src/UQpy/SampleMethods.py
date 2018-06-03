@@ -310,15 +310,12 @@ class PSS:
     :type pss_design: list
     :type pss_strata: list
 
+    Author: Jiaxin Zhang
     Created by: Jiaxin Zhang
     Last modified: 24/01/2018 by D.G. Giovanis
+    Last modified: June 3, 2018 by Jiaxin Zhang
 
     """
-
-    # TODO: Jiaxin - Add documentation to this subclass
-    # TODO: the pss_design = [[1,4], [2,5], [3]] - then reorder the sequence of RVs
-    # TODO: Add the sample check and pss_design check in the beginning
-    # TODO: Create a list that contains all element info - parent structure
 
     def __init__(self, dimension=None, pdf_type=None, pdf_params=None, pss_design=None, pss_strata=None):
 
@@ -351,7 +348,6 @@ class PSS:
     ################################################################################################################
     # Partially Stratified sampling (PSS) checks.
     # Necessary parameters:  1. pdf, 2. pdf parameters 3. pss design 4. pss strata
-    # Optional:
 
     def init_pss(self):
 
