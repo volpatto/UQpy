@@ -324,7 +324,7 @@ class PSS:
         self.pss_design = pss_design
         self.pss_strata = pss_strata
         self.dimension = dimension
-        self.init_pss()
+        #self.init_pss()
         self.nsamples = self.pss_strata[0] ** self.pss_design[0]
         self.samplesU01, self.samples = self.run_pss()
 
