@@ -6,6 +6,7 @@ import sys
 import copy
 from scipy.spatial.distance import pdist
 from modelist import *
+from UQpy.SampleMethods import MCMC
 import emcee
 import corner
 from scipy import integrate
@@ -15,35 +16,9 @@ import matplotlib.pyplot as plt
 
 # Created by: Jiaxin Zhang (As one of authors or contributors of UQpy?)
 # Author(Contributor???): Jiaxin Zhang
-# Last modified by: 1/15/2018
+# Last modified by: June 03 2018
 
-# This is a new class - inference
-
-# TODO: 16/56 todo list!
-# 1. Information theoretic model selection √
-# 2. Information theoretic multimodel selection √
-# 3. Bayesian parameter estimation - Multimodel
-# 4. Bayesian model selection
-# 5. Bayesian parameter estimation - Conventional MLE
-# 6. Optimal sampling density
-# 7. Copula model selection
-# 8. Copula multimodel selection
-# 9. Copula parameter selection
-# 10. Multimodel kriging??
-
-# 11. Global Sensitivity Analysis (sampling class)
-# 12. Importance sampling (sampling class)
-# 13. Partially Stratified Sampling (sampling class)
-# 14. Latinized Stratifed Sampling (sampling class)
-# 15. Latinized Partially Stratified Sampling (sampling class)
-# 16. Optimal sampling density (sampling or inference class)
-
-# TODO：01-15-2018
-# 1. using sampleMethods MCMC class or Ensemble MCMC
-# 3. Bayesian prior information input
-# 4. Bayesian model selection debug
-# 5. Multimodel information theoretic selection
-# 6. Bayesian parameter estimation - Conventional MLE
+# This is a new class - inference!
 
 
 class Inference:
@@ -159,9 +134,6 @@ class Inference:
         Last modified by: 3/29/2017
 
         """
-        # TODO: prior type - noninformative, informative
-        # TODO: prior distribution type - uniform, beta, normal etc.
-        # TODO: MCMC algorithms - emcee
 
         def __init__(self, data=None, model=None):
 
@@ -224,9 +196,13 @@ class Inference:
             # plt.plot(MCMC.samples[:,0], MCMC.samples[:,1], 'ro')
             # plt.show()
 
-            sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=[data])
-            sampler.run_mcmc(p0, 500)
-            trace = sampler.chain[:, 50:, :].reshape((-1, ndim))
+           # sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=[data])
+           # sampler.run_mcmc(p0, 500)
+           # trace = sampler.chain[:, 50:, :].reshape((-1, ndim))
+
+            z = MCMC(dimension=2, pdf_proposal_type=None, pdf_proposal_scale=2, pdf_target_type='joint_pdf',
+                     pdf_target=lnprob, pdf_target_params=[20], algorithm='Stretch', jump=1000, nsamples=1000,
+                     seed=None)
 
             #fig = corner.corner(trace, labels=["$m$", "$s$"], truths=[0, 1, np.log(1)])
             #fig.show()
