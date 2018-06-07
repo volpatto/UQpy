@@ -187,7 +187,6 @@ def inv_cdf(dist):
             else:
                 raise NotImplementedError('Unidentified pdf_type')
 
-    print(dist)
     return dist
 
 # ########################################################################################################################
