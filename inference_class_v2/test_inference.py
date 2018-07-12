@@ -11,12 +11,12 @@ import random
 
 random.seed(31415926)
 
-# data = [11624, 9388, 9471, 8927, 10865, 7698, 11744, 9238, 10319, 9750, 11462, 7939]
-mu, sigma = 2, 1
-data = np.random.normal(mu, sigma, 100)
+data = [11624, 9388, 9471, 8927, 10865, 7698, 11744, 9238, 10319, 9750, 11462, 7939]
+#mu, sigma = 2, 1
+#data = np.random.normal(mu, sigma, 100)
 #print(len(data))
 
-model = 'normal'
+model = ['normal', 'cauchy', 'exponential']
 #
 # ### Information model selection using AIC and BIC
 # Information_MS = Inference.InforMS(data=data, model=model)
@@ -34,17 +34,17 @@ model = 'normal'
 
 ## multimodel information inference
 #normal, lognormal, gamma, inverse gaussian, logistic, cauchy, exponential
-model = ['normal', 'cauchy', 'exponential']
-# model = ['normal','cauchy', 'exponential', 'lognormal', 'invgauss', 'logistic', 'gamma']
-MMI = Inference.MultiMI(data=data, model=model)
-print('model', MMI.model_sort)
-print('AICc_value', np.transpose(MMI.AICC))
-print('AICc_delta', np.transpose(MMI.delta))
-print('AICc_weights', np.transpose(MMI.weights))
-
-### multimodel Bayesian model selection
-model = ['normal', 'cauchy', 'exponential']
-MBayesI = Inference.MultiMBayesI(data=data, model=model)
-print('model', MBayesI.model_sort)
-print('Multimodel_Bayesian_Inference_weights', MBayesI.weights)
-# print('MLE_Bayes', MBayesI.mle_Bayes)
+# model = ['normal', 'cauchy', 'exponential']
+# # model = ['normal','cauchy', 'exponential', 'lognormal', 'invgauss', 'logistic', 'gamma']
+# MMI = Inference.MultiMI(data=data, model=model)
+# print('model', MMI.model_sort)
+# print('AICc_value', np.transpose(MMI.AICC))
+# print('AICc_delta', np.transpose(MMI.delta))
+# print('AICc_weights', np.transpose(MMI.weights))
+#
+# ### multimodel Bayesian model selection
+# model = ['normal', 'cauchy', 'exponential']
+# MBayesI = Inference.MultiMBayesI(data=data, model=model)
+# print('model', MBayesI.model_sort)
+# print('Multimodel_Bayesian_Inference_weights', MBayesI.weights)
+# # print('MLE_Bayes', MBayesI.mle_Bayes)

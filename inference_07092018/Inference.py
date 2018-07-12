@@ -18,7 +18,7 @@
 """This module contains functionality for all the Inference supported in UQpy."""
 
 
-from UQpy.SampleMethods import *
+from SampleMethods import *
 from scipy import integrate
 
 
@@ -168,7 +168,7 @@ class BayesianInference:
         self.samples, self.Bayes_factor, self.Bayes_mle = self.bayes_inf()
 
     def bayes_inf(self):
-        from UQpy.SampleMethods import MCMC
+        from SampleMethods import MCMC
 
         z = MCMC(dimension=self.dimension, pdf_proposal_type=self.pdf_proposal_type,
                  pdf_proposal_scale=self.pdf_proposal_scale,
