@@ -1,50 +1,92 @@
+# UQpy is distributed under the MIT license.
+#
+# Copyright (C) 2018  -- Michael D. Shields
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+# persons to whom the Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+# Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 """This module contains functionality for all the sampling methods supported in UQpy."""
-import sys
+
 import copy
 import numpy as np
 from scipy.spatial.distance import pdist
 import scipy.stats as sp
 import random
 from UQpy.Distributions import *
-import warnings
 
 ########################################################################################################################
 ########################################################################################################################
 #                                         Monte Carlo simulation
 ########################################################################################################################
 
+
 class MCS:
     """
-    A class used to perform brute force Monte Carlo design of experiment (MCS).
-    SamplesU01 belong in hypercube [0, 1]^n while samples belong to the parameter space
+    A class used to perform Monte Carlo sampling (MCS) of independent random variables from a user-specified probability
+    distribution using inverse transform method.
 
-    :param dimension: Number of parameters
+    :param dimension: A scalar value defining the dimension of the random variables
+                        Default: len(icdf)
     :type dimension: int
 
-    :param nsamples: Number of samples to be generated
+    :param icdf: Inverse cumulative distribution for each random variable.
+                The inverse cdf may be defined as a function, a string, a list of functions, a list of strings, or a
+                    list of functions and strings
+                Each item in the list specifies the distribution of the corresponding random variable.
+                If icdf[i] is a string, the cdf is defined in Distributions.py or custom_dist.py
+                If icdf[i] is a function, the user must define this function in the script and pass it
+    :type icdf: function/string list
+
+    :param icdf_params: Parameters of the inverse cdf (icdf)
+                Parameters for each random variable are defined as ndarrays
+                Each item in the list, icdf_params[i], specifies the parameters for the corresponding inverse cdf,
+                    icdf[i]
+    :type icdf_params: list
+
+    :param nsamples: Number of samples to generate
+                      No Default Value: nsamples must be prescribed
     :type nsamples: int
 
-    :param pdf_type: Type of distributions
-    :type pdf_type: list
+    Output:
+    :return: MCS.samples: Set of generated samples
+    :rtype: MCS.samples: ndarray
 
-    :param pdf_params: Distribution parameters
-    :type pdf_params: list
+    :return: MCS.samplesU01: Set of uniform samples on [0, 1]^dimension
+    :rtype: MCS.samplesU01: ndarray
 
     """
 
-    def __init__(self, dimension=None, pdf_type=None, pdf_params=None, nsamples=None):
+    # Authors: Dimitris G.Giovanis
+    # Last Modified: 6/7/18 by Dimitris G. Giovanis & Michael Shields
+
+    def __init__(self, dimension=None, icdf=None, icdf_params=None, nsamples=None):
 
         self.dimension = dimension
         self.nsamples = nsamples
-        self.pdf_type = pdf_type
-        self.pdf_params = pdf_params
+        self.icdf = icdf
+        self.icdf_params = icdf_params
         self.init_mcs()
         self.samplesU01, self.samples = self.run_mcs()
 
     def run_mcs(self):
-
+        print('UQpy: Performing MCS design...')
         samples = np.random.rand(self.nsamples, self.dimension)
-        samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
+        samples_u_to_x = np.zeros_like(samples)
+        for j in range(samples.shape[1]):
+            icdf = self.icdf[j]
+            for i in range(samples.shape[0]):
+                samples_u_to_x[i, j] = icdf(samples[i, j], self.icdf_params[j])
+        print('Done!')
         return samples, samples_u_to_x
 
     ################################################################################################################
@@ -53,41 +95,51 @@ class MCS:
     # Optional: dimension, names of random variables
 
     def init_mcs(self):
+
+        # Ensure that the number of samples is defined
         if self.nsamples is None:
             raise NotImplementedError("Exit code: Number of samples not defined.")
-        if self.pdf_type is None:
+
+        # Ensure that a distribution is assigned.
+        if self.icdf is None:
             raise NotImplementedError("Exit code: Distributions not defined.")
-        else:
-            for i in self.pdf_type:
-                if i not in ['Uniform', 'Normal', 'Lognormal', 'Weibull', 'Beta', 'Exponential', 'Gamma']:
-                    raise NotImplementedError("Exit code: Unrecognized type of distribution."
-                                                  "Supported distributions: 'Uniform', 'Normal', 'Lognormal', "
-                                                  "'Weibull', 'Beta', 'Exponential', 'Gamma'. ")
-        if self.pdf_params is None:
+
+        # Check inverse cdf (i_cdf)
+        if type(self.icdf).__name__ != 'list':
+            self.icdf = [self.icdf]
+        if len(self.icdf) == 1 and self.dimension != 1:
+            self.icdf = self.icdf * self.dimension
+        elif len(self.icdf) != self.dimension:
+            raise NotImplementedError("Length of i_cdf should be 1 or equal to dimension")
+
+        # Assign inverse cdf (i_cdf) function for each dimension
+        for i in range(len(self.icdf)):
+            if type(self.icdf[i]).__name__ == 'function':
+                self.icdf[i] = self.icdf[i]
+            elif type(self.icdf[i]).__name__ == 'str':
+                self.icdf[i] = inv_cdf(self.icdf[i])
+            else:
+                raise NotImplementedError("Distribution type should be either 'function' or 'list'")
+
+        # Check the dimension
+        if self.dimension is None:
+            self.dimension = len(self.icdf)
+
+        # Ensure that distribution parameters are assigned
+        if self.icdf_params is None:
             raise NotImplementedError("Exit code: Distribution parameters not defined.")
 
-        if self.dimension is None:
-            if len(self.pdf_type) != len(self.pdf_params):
-                raise NotImplementedError("Exit code: Incompatible dimensions.")
-            else:
-                self.dimension = len(self.pdf_type)
-        else:
-            import itertools
-            from itertools import chain
+        # Check i_cdf_params
+        if type(self.icdf_params).__name__ != 'list':
+            self.icdf_params = [self.icdf_params]
+        if len(self.icdf_params) == 1 and self.dimension != 1:
+            self.icdf_params = self.icdf_params * self.dimension
+        elif len(self.icdf_params) != self.dimension:
+            raise NotImplementedError("Length of i_cdf_params should be 1 or equal to dimension")
 
-            if len(self.pdf_type) == 1 and len(self.pdf_params) == self.dimension:
-                self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-                self.pdf_type  =  list(chain.from_iterable(self.pdf_type))
-            elif len(self.pdf_params) == 1 and len(self.pdf_type) == self.dimension:
-                self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-                self.pdf_params = list(chain.from_iterable(self.pdf_params))
-            elif len(self.pdf_params) == 1 and len(self.pdf_type) == 1:
-                self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-                self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-                self.pdf_type = list(chain.from_iterable(self.pdf_type))
-                self.pdf_params = list(chain.from_iterable(self.pdf_params))
-            elif len(self.pdf_type) != len(self.pdf_params):
-                raise NotImplementedError("Exit code: Incompatible dimensions")
+        # Check for dimensional consistency
+        if len(self.icdf) != len(self.icdf_params):
+            raise NotImplementedError("Exit code: Incompatible dimensions.")
 
 
 ########################################################################################################################
@@ -95,44 +147,76 @@ class MCS:
 #                                         Latin hypercube sampling  (LHS)
 ########################################################################################################################
 
+
 class LHS:
-    """
-    A class that creates a Latin Hypercube Design for experiments.
-    SamplesU01 belong in hypercube [0, 1]^n while samples belong to the parameter space
+    """Generate samples based on the Latin Hypercube Design.
 
-    :param pdf_type: Distribution of the parameters
-    :type pdf_type: list
+    A class that creates a Latin Hypercube Design for experiments. Firstly, samples on hypercube [0, 1]^n are generated
+    and then translated to the parameter space.
 
-    :param pdf_params: Distribution parameters
-    :type pdf_params: list
+    Input:
+
+    :param dimension: A scalar value defining the dimension of the random variables
+                        Default: len(i_cdf)
+    :type dimension: int
+
+    :param icdf: Inverse cumulative distribution for each random variable.
+                The inverse cdf may be defined as a function, a string, a list of functions, a list of strings, or a
+                    list of functions and strings
+                Each item in the list specifies the distribution of the corresponding random variable.
+                If icdf[i] is a string, the cdf is defined in Distributions.py or custom_dist.py
+                If icdf[i] is a function, the user must define this function in the script and pass it
+    :type icdf: function/string list
+
+    :param icdf_params: Parameters of the inverse cdf (icdf)
+                Parameters for each random variable are defined as arrays
+                Each item in the list, icdf_params[i], specifies the parameters for the corresponding inverse cdf,
+                    icdf[i]
+    :type icdf_params: list
 
     :param lhs_criterion: The criterion for generating sample points
-                           Options:
-                                1. random - completely random \n
-                                2. centered - points only at the centre \n
-                                3. maximin - maximising the minimum distance between points \n
-                                4. correlate - minimizing the correlation between the points \n
+                            Options:
+                                1. 'random' - completely random \n
+                                2. 'centered' - points only at the centre \n
+                                3. 'maximin' - maximising the minimum distance between points \n
+                                4. 'correlate' - minimizing the correlation between the points \n
+                            Default: 'random'
     :type lhs_criterion: str
 
-    :param lhs_iter: The number of iteration to run. Only for maximin, correlate and criterion
-    :type lhs_iter: int
-
     :param lhs_metric: The distance metric to use. Supported metrics are
-                        'braycurtis', 'canberra', 'chebyshev', 'cityblock', 'correlation', 'cosine', 'dice', \n
-                        'euclidean', 'hamming', 'jaccard', 'kulsinski', 'mahalanobis', 'matching', 'minkowski', \n
-                        'rogerstanimoto', 'russellrao', 'seuclidean', 'sokalmichener', 'sokalsneath', 'sqeuclidean', \n
+                        'braycurtis', 'canberra', 'chebyshev', 'cityblock', 'correlation', 'cosine', 'dice',
+                        'euclidean', 'hamming', 'jaccard', 'kulsinski', 'mahalanobis', 'matching', 'minkowski',
+                        'rogerstanimoto', 'russellrao', 'seuclidean', 'sokalmichener', 'sokalsneath', 'sqeuclidean',
                         'yule'.
+                        Default: 'euclidean'
     :type lhs_metric: str
 
-    """
+    :param lhs_iter: The number of iteration to run. Required only for maximin, correlate and criterion
+                        Default: 100
+    :type lhs_iter: int
 
-    def __init__(self, dimension=None, pdf_type=None, pdf_params=None, lhs_criterion=None, lhs_metric=None,
-                 lhs_iter=None, nsamples=None):
+    :param nsamples: Number of samples to generate
+                        No Default Value: nsamples must be prescribed
+    :type nsamples: int
+
+    Output
+    :return: LHS.samples: Set of LHS samples
+    :rtype: LHS.samples: ndarray
+
+    :return: LHS.samplesU01: Set of uniform LHS samples on [0, 1]^dimension
+    :rtype: LHS.samplesU01: ndarray
+
+    """
+    # Created by: Lohit Vandanapu
+    # Last modified: 6/7/2018 by Dimitris Giovanis & Michael Shields
+
+    def __init__(self, dimension=1, icdf=None, icdf_params=None, lhs_criterion='random', lhs_metric='euclidean',
+                 lhs_iter=100, nsamples=None):
 
         self.dimension = dimension
         self.nsamples = nsamples
-        self.pdf_type = pdf_type
-        self.pdf_params = pdf_params
+        self.icdf = icdf
+        self.icdf_params = icdf_params
         self.lhs_criterion = lhs_criterion
         self.lhs_metric = lhs_metric
         self.lhs_iter = lhs_iter
@@ -141,34 +225,34 @@ class LHS:
 
     def run_lhs(self):
 
-        print('Running LHS for ' + str(self.lhs_iter) + ' iterations')
-
+        print('UQpy: Performing LHS design...')
         cut = np.linspace(0, 1, self.nsamples + 1)
         a = cut[:self.nsamples]
         b = cut[1:self.nsamples + 1]
 
+        samples = self._samples(a, b)
+
+        samples_u_to_x = np.zeros_like(samples)
+        for j in range(samples.shape[1]):
+            i_cdf = self.icdf[j]
+            for i in range(samples.shape[0]):
+                samples_u_to_x[i, j] = i_cdf(samples[i, j], self.icdf_params[j])
+
+        print('Done')
+        return samples, samples_u_to_x
+
+    def _samples(self, a, b):
+
         if self.lhs_criterion == 'random':
-            samples = self._random(a, b)
-            samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
-            return samples, samples_u_to_x
+            return self._random(a, b)
         elif self.lhs_criterion == 'centered':
-            samples = self._centered(a, b)
-            samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
-            return samples, samples_u_to_x
+            return self._centered(a, b)
         elif self.lhs_criterion == 'maximin':
-            samples = self._max_min(a, b)
-            samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
-            return samples, samples_u_to_x
+            return self._max_min(a, b)
         elif self.lhs_criterion == 'correlate':
-            samples = self._correlate(a, b)
-            samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
-            return samples, samples_u_to_x
+            return self._correlate(a, b)
 
     def _random(self, a, b):
-        """
-        :return: The samples points for the random LHS design
-
-        """
         u = np.random.rand(self.nsamples, self.dimension)
         samples = np.zeros_like(u)
 
@@ -212,13 +296,15 @@ class LHS:
         samples = self._random(a, b)
         for _ in range(self.lhs_iter):
             samples_try = self._random(a, b)
-            R = np.corrcoef(np.transpose(samples_try))
-            np.fill_diagonal(R, 1)
-            R1 = R[R != 1]
-            if np.max(np.abs(R1)) < min_corr:
-                min_corr = np.max(np.abs(R1))
+            r = np.corrcoef(np.transpose(samples_try))
+            np.fill_diagonal(r, 1)
+            r1 = r[r != 1]
+            if np.max(np.abs(r1)) < min_corr:
+                min_corr = np.max(np.abs(r1))
                 samples = copy.deepcopy(samples_try)
+
         print('Achieved minimum correlation of ', min_corr)
+
         return samples
 
     ################################################################################################################
@@ -228,40 +314,46 @@ class LHS:
 
     def init_lhs(self):
 
+        # Ensure that the number of samples is defined
         if self.nsamples is None:
             raise NotImplementedError("Exit code: Number of samples not defined.")
-        if self.pdf_type is None:
-            raise NotImplementedError("Exit code: Distributions not defined.")
-        else:
-            for i in self.pdf_type:
-                if i not in ['Uniform', 'Normal', 'Lognormal', 'Weibull', 'Beta', 'Exponential', 'Gamma']:
-                    raise NotImplementedError("Exit code: Unrecognized type of distribution."
-                                              "Supported distributions: 'Uniform', 'Normal', 'Lognormal', 'Weibull', "
-                                              "'Beta', 'Exponential', 'Gamma'.")
-        if self.pdf_params is None:
-            raise NotImplementedError("Exit code: Distribution parameters not defined.")
-        if self.dimension is None:
-            if len(self.pdf_type) != len(self.pdf_params):
-                raise NotImplementedError("Exit code: Incompatible dimensions.")
-            else:
-                self.dimension = len(self.pdf_type)
-        else:
-            import itertools
-            from itertools import chain
 
-            if len(self.pdf_type) == 1 and len(self.pdf_params) == self.dimension:
-                self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-                self.pdf_type = list(chain.from_iterable(self.pdf_type))
-            elif len(self.pdf_params) == 1 and len(self.pdf_type) == self.dimension:
-                self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-                self.pdf_params = list(chain.from_iterable(self.pdf_params))
-            elif len(self.pdf_params) == 1 and len(self.pdf_type) == 1:
-                self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-                self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-                self.pdf_type = list(chain.from_iterable(self.pdf_type))
-                self.pdf_params = list(chain.from_iterable(self.pdf_params))
-            elif len(self.pdf_type) != len(self.pdf_params):
-                raise NotImplementedError("Exit code: Incompatible dimensions.")
+        # Check inverse cdf (i_cdf)
+        if type(self.icdf).__name__ != 'list':
+            self.icdf = [self.icdf]
+        if len(self.icdf) == 1 and self.dimension != 1:
+            self.icdf = self.icdf * self.dimension
+        elif len(self.icdf) != self.dimension:
+            raise NotImplementedError("Length of i_cdf should be 1 or equal to dimension")
+
+        # Assign i_cdf function for each dimension
+        for i in range(len(self.icdf)):
+            if type(self.icdf[i]).__name__ == 'function':
+                self.icdf[i] = self.icdf[i]
+            elif type(self.icdf[i]).__name__ == 'str':
+                self.icdf[i] = inv_cdf(self.icdf[i])
+            else:
+                raise NotImplementedError("Distribution type should be either 'function' or 'list'")
+
+        # Check the dimension
+        if self.dimension is None:
+            self.dimension = len(self.icdf)
+
+        # Ensure that distribution parameters are assigned
+        if self.icdf_params is None:
+            raise NotImplementedError("Exit code: Distribution parameters not defined.")
+
+        # Check i_cdf_params
+        if type(self.icdf_params).__name__ != 'list':
+            self.icdf_params = [self.icdf_params]
+        if len(self.icdf_params) == 1 and self.dimension != 1:
+            self.icdf_params = self.icdf_params * self.dimension
+        elif len(self.icdf_params) != self.dimension:
+            raise NotImplementedError("Length of i_cdf_params should be 1 or equal to dimension")
+
+        # Check for dimensional consistency
+        if len(self.icdf) != len(self.icdf_params):
+            raise NotImplementedError("Exit code: Incompatible dimensions.")
 
         if self.lhs_criterion is None:
             self.lhs_criterion = 'random'
@@ -288,199 +380,143 @@ class LHS:
         elif self.lhs_iter is not None:
             self.lhs_iter = int(self.lhs_iter)
 
-########################################################################################################################
-########################################################################################################################
-#                                         Partially Stratified Sampling (PSS)
-########################################################################################################################
-class PSS:
-    """
-    This class generates a partially stratified sample set on U(0,1) as described in:
-    Shields, M.D. and Zhang, J. "The generalization of Latin hypercube sampling" Reliability Engineering and
-    System Safety. 148: 96-108
-
-    :param pss_design: Vector defining the subdomains to be used.
-                       Example: 5D problem with 2x2D + 1x1D subdomains using pss_design = [2,2,1]. \n
-                       Note: The sum of the values in the pss_design vector equals the dimension of the problem.
-    :param pss_strata: Vector defining how each dimension should be stratified.
-                        Example: 5D problem with 2x2D + 1x1D subdomains with 625 samples using
-                         pss_pss_stratum = [25,25,625].\n
-                        Note: pss_pss_stratum(i)^pss_design(i) = number of samples (for all i)
-    :return: pss_samples: Generated samples Array (nSamples x nRVs)
-    :type pss_design: list
-    :type pss_strata: list
-
-    Author: Jiaxin Zhang
-    Created by: Jiaxin Zhang
-    Last modified: 24/01/2018 by D.G. Giovanis
-    Last modified: June 3, 2018 by Jiaxin Zhang
-
-    """
-
-    def __init__(self, dimension=None, pdf_type=None, pdf_params=None, pss_design=None, pss_strata=None):
-
-        self.pdf_type = pdf_type
-        self.pdf_params = pdf_params
-        self.pss_design = pss_design
-        self.pss_strata = pss_strata
-        self.dimension = dimension
-        #self.init_pss()
-        self.nsamples = self.pss_strata[0] ** self.pss_design[0]
-        self.samplesU01, self.samples = self.run_pss()
-
-    def run_pss(self):
-        samples = np.zeros((self.nsamples, self.dimension))
-        samples_u_to_x = np.zeros((self.nsamples, self.dimension))
-        col = 0
-        for i in range(len(self.pss_design)):
-            n_stratum = self.pss_strata[i] * np.ones(self.pss_design[i], dtype=np.int)
-            sts = STS(pdf_type=self.pdf_type, pdf_params=self.pdf_params, sts_design=n_stratum, pss_=True)
-            index = list(range(col, col + self.pss_design[i]))
-            samples[:, index] = sts.samplesU01
-            samples_u_to_x[:, index] = sts.samples
-            arr = np.arange(self.nsamples).reshape((self.nsamples, 1))
-            samples[:, index] = samples[np.random.permutation(arr), index]
-            samples_u_to_x[:, index] = samples_u_to_x[np.random.permutation(arr), index]
-            col = col + self.pss_design[i]
-
-        return samples, samples_u_to_x
-
-    ################################################################################################################
-    # Partially Stratified sampling (PSS) checks.
-    # Necessary parameters:  1. pdf, 2. pdf parameters 3. pss design 4. pss strata
-
-    def init_pss(self):
-
-        if self.pdf_type is None:
-            raise NotImplementedError("Exit code: Distribution not defined.")
-        else:
-            for i in self.pdf_type:
-                if i not in ['Uniform', 'Normal', 'Lognormal', 'Weibull', 'Beta', 'Exponential', 'Gamma']:
-                    raise NotImplementedError("Exit code: Unrecognized type of distribution."
-                                              "Supported distributions: 'Uniform', 'Normal', 'Lognormal', 'Weibull', "
-                                              "'Beta', 'Exponential', 'Gamma'. ")
-        if self.pdf_params is None:
-            raise NotImplementedError("Exit code: Distribution parameters not defined.")
-
-        if self.pss_design is None:
-            raise NotImplementedError("Exit code: pss design not defined.")
-        elif self.pss_strata is None:
-            raise NotImplementedError("Exit code: pss strata not defined.")
-        else:
-            if len(self.pss_design) != len(self.pss_strata):
-                raise ValueError('Exit code: "pss design" and "pss strata" must be the same length.')
-
-        sample_check = np.zeros((len(self.pss_strata), len(self.pss_design)))
-        for i in range(len(self.pss_strata)):
-            for j in range(len(self.pss_design)):
-                sample_check[i, j] = self.pss_strata[i] ** self.pss_design[j]
-
-        if np.max(sample_check) != np.min(sample_check):
-            raise ValueError('Exit code: All dimensions must have the same number of samples/strata.')
-
-        if self.dimension is None:
-            self.dimension = np.sum(self.pss_design)
-        else:
-            if self.dimension != np.sum(self.pss_design):
-                raise NotImplementedError("Exit code: Incompatible dimensions.")
-
-        import itertools
-        from itertools import chain
-
-        if len(self.pdf_type) == 1 and len(self.pdf_params) == self.dimension:
-            self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-            self.pdf_type  =  list(chain.from_iterable(self.pdf_type))
-        elif len(self.pdf_params) == 1 and len(self.pdf_type) == self.dimension:
-            self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-            self.pdf_params = list(chain.from_iterable(self.pdf_params))
-        elif len(self.pdf_params) == 1 and len(self.pdf_type) == 1:
-            self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-            self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-            self.pdf_type = list(chain.from_iterable(self.pdf_type))
-            self.pdf_params = list(chain.from_iterable(self.pdf_params))
-        elif len(self.pdf_type) != len(self.pdf_params):
-            raise NotImplementedError("Exit code: Incompatible dimensions.")
-
 
 ########################################################################################################################
 ########################################################################################################################
-#                                         Stratified Sampling  (sts)
+#                                         Stratified Sampling  (STS)
 ########################################################################################################################
 
 class STS:
-    # TODO: MDS - Add documentation to this subclass
-    """
-    :param dimension:
-    :param pdf_type:
-    :param pdf_params:
-    :param sts_design:
-    :param pss_:
+
+    """Generate samples from an assigned probability density function using Stratified Sampling.
+
+    References:
+    M.D. Shields, K. Teferra, A. Hapij, and R.P. Daddazio, "Refined Stratified Sampling for efficient Monte Carlo based
+        uncertainty quantification," Reliability Engineering and System Safety, vol. 142, pp. 310-325, 2015.
+
+    Input:
+    :param dimension:  A scalar value defining the dimension of target density function.
+                    Default: Length of sts_design                
+    :type dimension: int
+    
+    :param icdf: Inverse cumulative distribution for each random variable.
+                The inverse cdf may be defined as a function, a string, a list of functions, a list of strings, or a
+                    list of functions and strings
+                Each item in the list specifies the distribution of the corresponding random variable.
+                If icdf[i] is a string, the cdf is defined in Distributions.py or custom_dist.py
+                If icdf[i] is a function, the user must define this function in the script and pass it
+    :type icdf: function/string list
+
+    :param icdf_params: Parameters of the inverse cdf (icdf)
+                Parameters for each random variable are defined as arrays
+                Each item in the list, icdf_params[i], specifies the parameters for the corresponding inverse cdf,
+                    i_cdf[i]
+    :type icdf_params: list
+
+    :param sts_design: Specifies the number of strata in each dimension
+    :type sts_design: int list
+
+    :param input_file: File path to input file specifying stratum origins and stratum widths
+                    Default: None
+    :type input_file: string
+    
+    Output:
+    :return: STS.samples: Set of stratified samples
+    :rtype: STS.samples: ndarray
+
+    :return: STS.samplesU01: Set of uniform stratified samples on [0, 1]^dimension
+    :rtype: STS.samplesU01: ndarray
+
+    :return: STS.strata: Instance of the class SampleMethods.Strata
+    :rtype: STS.strata: ndarray
+    
     """
 
-    def __init__(self, dimension=None, pdf_type=None, pdf_params=None, sts_design=None, pss_=None):
+    # Authors: Michael Shields
+    # Last modified: 6/7/2018 by Dimitris Giovanis & Michael Shields
+
+    def __init__(self, dimension=None, icdf=None, icdf_params=None, sts_design=None, input_file=None):
 
         self.dimension = dimension
-        self.pdf_type = pdf_type
-        self.pdf_params = pdf_params
+        self.icdf = icdf
+        self.icdf_params = icdf_params
         self.sts_design = sts_design
-        if pss_ is None:
-            self.init_sts()
-        strata = Strata(nstrata=self.sts_design)
-        self.origins = strata.origins
-        self.widths = strata.widths
-        self.weights = strata.weights
+        self.input_file = input_file
+        self.strata = None
+        self.init_sts()
         self.samplesU01, self.samples = self.run_sts()
 
     def run_sts(self):
-        samples = np.empty([self.origins.shape[0], self.origins.shape[1]], dtype=np.float32)
-        for i in range(0, self.origins.shape[0]):
-            for j in range(0, self.origins.shape[1]):
-                samples[i, j] = np.random.uniform(self.origins[i, j], self.origins[i, j] + self.widths[i, j])
-        samples_u_to_x = inv_cdf(samples, self.pdf_type, self.pdf_params)
+        print('UQpy: Performing STS design...')
+        samples = np.empty([self.strata.origins.shape[0], self.strata.origins.shape[1]], dtype=np.float32)
+        samples_u_to_x = np.empty([self.strata.origins.shape[0], self.strata.origins.shape[1]], dtype=np.float32)
+        for j in range(0, self.strata.origins.shape[1]):
+            icdf = self.icdf[j]
+            for i in range(0, self.strata.origins.shape[0]):
+                samples[i, j] = np.random.uniform(self.strata.origins[i, j], self.strata.origins[i, j]
+                                                  + self.strata.widths[i, j])
+                samples_u_to_x[i, j] = icdf(samples[i, j], self.icdf_params[j])
+        print('Done!')
         return samples, samples_u_to_x
 
     def init_sts(self):
 
-        if self.pdf_type is None:
-            raise NotImplementedError("Exit code: Distribution not defined.")
-        else:
-            for i in self.pdf_type:
-                if i not in ['Uniform', 'Normal', 'Lognormal', 'Weibull', 'Beta', 'Exponential', 'Gamma']:
-                    raise NotImplementedError("Exit code: Unrecognized type of distribution."
-                                              "Supported distributions: 'Uniform', 'Normal', 'Lognormal', 'Weibull', "
-                                              "'Beta', 'Exponential', 'Gamma'. ")
-        if self.pdf_params is None:
-            raise NotImplementedError("Exit code: Distribution parameters not defined.")
-
-        if self.sts_design is None:
-            raise NotImplementedError("Exit code: sts design not defined.")
-
-        if self.dimension is None:
+        # Check for dimensional consistency
+        if self.dimension is None and self.sts_design is not None:
             self.dimension = len(self.sts_design)
-        else:
+        elif self.sts_design is not None:
             if self.dimension != len(self.sts_design):
                 raise NotImplementedError("Exit code: Incompatible dimensions.")
+        elif self.sts_design is None and self.dimension is None:
+            raise NotImplementedError("Exit code: Dimension must be specified.")
 
-        import itertools
-        from itertools import chain
+        # Check i_cdf
+        if type(self.icdf).__name__ != 'list':
+            self.icdf = [self.icdf]
+        if len(self.icdf) == 1 and self.dimension != 1:
+            self.icdf = self.icdf * self.dimension
+        elif len(self.icdf) != self.dimension:
+            raise NotImplementedError("Length of i_cdf should be 1 or equal to dimension")
 
-        if len(self.pdf_type) == 1 and len(self.pdf_params) == self.dimension:
-            self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-            self.pdf_type = list(chain.from_iterable(self.pdf_type))
-        elif len(self.pdf_params) == 1 and len(self.pdf_type) == self.dimension:
-            self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-            self.pdf_params = list(chain.from_iterable(self.pdf_params))
-        elif len(self.pdf_params) == 1 and len(self.pdf_type) == 1:
-            self.pdf_params = list(itertools.repeat(self.pdf_params, self.dimension))
-            self.pdf_type = list(itertools.repeat(self.pdf_type, self.dimension))
-            self.pdf_type = list(chain.from_iterable(self.pdf_type))
-            self.pdf_params = list(chain.from_iterable(self.pdf_params))
-        elif len(self.pdf_type) != len(self.pdf_params):
+        # Assign i_cdf function for each dimension
+        for i in range(len(self.icdf)):
+            if type(self.icdf[i]).__name__ == 'function':
+                self.icdf[i] = self.icdf[i]
+            elif type(self.icdf[i]).__name__ == 'str':
+                self.icdf[i] = inv_cdf(self.icdf[i])
+            else:
+                raise NotImplementedError("Distribution type should be either 'function' or 'list'")
+
+        # Check the dimension
+        if self.dimension is None:
+            self.dimension = len(self.icdf)
+
+        # Ensure that distribution parameters are assigned
+        if self.icdf_params is None:
+            raise NotImplementedError("Exit code: Distribution parameters not defined.")
+
+        # Check i_cdf_params
+        if type(self.icdf_params).__name__ != 'list':
+            self.icdf_params = [self.icdf_params]
+        if len(self.icdf_params) == 1 and self.dimension != 1:
+            self.icdf_params = self.icdf_params * self.dimension
+        elif len(self.icdf_params) != self.dimension:
+            raise NotImplementedError("Length of i_cdf_params should be 1 or equal to dimension")
+
+        # Check for dimensional consistency
+        if len(self.icdf) != len(self.icdf_params):
             raise NotImplementedError("Exit code: Incompatible dimensions.")
 
-        # TODO: Create a list that contains all element info - parent structure
-        # e.g. SS_samples = [STS[j] for j in range(0,nsamples)]
-        # hstack
-
+        if self.sts_design is None:
+            if self.input_file is None:
+                raise NotImplementedError("Exit code: Stratum design is not defined.")
+            else:
+                self.strata = Strata(input_file=self.input_file)
+        else:
+            if len(self.sts_design) != self.dimension:
+                raise NotImplementedError("Exit code: Incompatible dimensions in 'sts_design'.")
+            else:
+                self.strata = Strata(n_strata=self.sts_design)
 
 ########################################################################################################################
 ########################################################################################################################
@@ -492,89 +528,58 @@ class Strata:
     """
     Define a rectilinear stratification of the n-dimensional unit hypercube with N strata.
 
-    :param nstrata: array-like
-                    An array of dimension 1 x n defining the number of strata in each of the n dimensions
-                    Creates an equal stratification with strata widths equal to 1/nstrata
-                    The total number of strata, N, is the product of the terms of nstrata
+    Input:
+    :param n_strata: A list of dimension n defining the number of strata in each of the n dimensions
+                    Creates an equal stratification with strata widths equal to 1/n_strata
+                    The total number of strata, N, is the product of the terms of n_strata
                     Example -
-                    nstrata = [2, 3, 2] creates a 3d stratification with:
+                    n_strata = [2, 3, 2] creates a 3d stratification with:
                     2 strata in dimension 0 with stratum widths 1/2
                     3 strata in dimension 1 with stratum widths 1/3
                     2 strata in dimension 2 with stratum widths 1/2
+    :type n_strata int list
 
-    :param input_file: string
-                       File path to input file specifying stratum origins and stratum widths
+    :param input_file: File path to input file specifying stratum origins and stratum widths
+                    Default: None
+    :type input_file: string
 
-    :param origins: array-like
-                    An array of dimension N x n specifying the origins of all strata
+    Output:
+    :return origins: An array of dimension N x n specifying the origins of all strata
                     The origins of the strata are the coordinates of the stratum orthotope nearest the global origin
                     Example - A 2D stratification with 2 strata in each dimension
                     origins = [[0, 0]
                               [0, 0.5]
                               [0.5, 0]
                               [0.5, 0.5]]
+    :rtype origins: array
 
-    :param widths: array-like
-                   An array of dimension N x n specifying the widths of all strata in each dimension
+    :return widths: An array of dimension N x n specifying the widths of all strata in each dimension
                    Example - A 2D stratification with 2 strata in each dimension
                    widths = [[0.5, 0.5]
                              [0.5, 0.5]
                              [0.5, 0.5]
                              [0.5, 0.5]]
+    :rtype widths: ndarray
+
+    :return weights: An array of dimension 1 x N containing sample weights.
+                    Sample weights are equal to the product of the strata widths (i.e. they are equal to the size of the
+                        strata in the [0, 1]^n space.
+    :rtype weights: ndarray
 
     """
 
-    def __init__(self, nstrata=None, input_file=None, origins=None, widths=None):
-
-        """
-        Class defines a rectilinear stratification of the n-dimensional unit hypercube with N strata
-
-        :param nstrata: array-like
-            An array of dimension 1 x n defining the number of strata in each of the n dimensions
-            Creates an equal stratification with strata widths equal to 1/nstrata
-            The total number of strata, N, is the product of the terms of nstrata
-            Example -
-            nstrata = [2, 3, 2] creates a 3d stratification with:
-                2 strata in dimension 0 with stratum widths 1/2
-                3 strata in dimension 1 with stratum widths 1/3
-                2 strata in dimension 2 with stratum widths 1/2
-
-        :param input_file: string
-            File path to input file specifying stratum origins and stratum widths
-            See documentation ######## for input file format
-
-        :param origins: array-like
-            An array of dimension N x n specifying the origins of all strata
-            The origins of the strata are the coordinates of the stratum orthotope nearest the global origin
-            Example - A 2D stratification with 2 strata in each dimension
-            origins = [[0, 0]
-                       [0, 0.5]
-                       [0.5, 0]
-                       [0.5, 0.5]]
-
-        :param widths: array-like
-            An array of dimension N x n specifying the widths of all strata in each dimension
-            Example - A 2D stratification with 2 strata in each dimension
-            widths = [[0.5, 0.5]
-                      [0.5, 0.5]
-                      [0.5, 0.5]
-                      [0.5, 0.5]]
-
-        Created by: Michael D. Shields
-        Last modified: 11/4/2017
-        Last modified by: Michael D. Shields
-
-        """
+    def __init__(self, n_strata=None, input_file=None, origins=None, widths=None):
 
         self.input_file = input_file
-        self.nstrata = nstrata
+        self.n_strata = n_strata
         self.origins = origins
         self.widths = widths
 
-        if self.nstrata is None:
+        # Read a stratified design from an input file.
+        if self.n_strata is None:
             if self.input_file is None:
                 if self.widths is None or self.origins is None:
-                    sys.exit('Error: The strata are not fully defined. Must provide [nstrata], '
+                    sys.exit('Error: The strata are not fully defined. Must provide [n_strata], '
                              'input file, or [origins] and [widths]')
 
             else:
@@ -582,91 +587,69 @@ class Strata:
                 # See documentation for input file formatting
                 array_tmp = np.loadtxt(input_file)
                 self.origins = array_tmp[:, 0:array_tmp.shape[1] // 2]
-                self.width = array_tmp[:, array_tmp.shape[1] // 2:]
+                self.widths = array_tmp[:, array_tmp.shape[1] // 2:]
 
                 # Check to see that the strata are space-filling
-                space_fill = np.sum(np.prod(self.width, 1))
+                space_fill = np.sum(np.prod(self.widths, 1))
                 if 1 - space_fill > 1e-5:
                     sys.exit('Error: The stratum design is not space-filling.')
                 if 1 - space_fill < -1e-5:
                     sys.exit('Error: The stratum design is over-filling.')
 
-                    # TODO: MDS - Add a check for disjointness of strata
-                    # Check to see that the strata are disjoint
-                    # ncorners = 2**self.strata.shape[1]
-                    # for i in range(0,len(self.strata)):
-                    #     for j in range(0,ncorners):
-
+        # Define a rectilinear stratification by specifying the number of strata in each dimension via nstrata
         else:
-            # Use nstrata to assign the origin and widths of a specified rectilinear stratification.
-            self.origins = np.divide(self.fullfact(self.nstrata), self.nstrata)
-            self.widths = np.divide(np.ones(self.origins.shape), self.nstrata)
-            self.weights = np.prod(self.widths, axis=1)
+            self.origins = np.divide(self.fullfact(self.n_strata), self.n_strata)
+            self.widths = np.divide(np.ones(self.origins.shape), self.n_strata)
 
-    def fullfact(self, levels):
+        self.weights = np.prod(self.widths, axis=1)
 
-        # TODO: MDS - Acknowledge the source here.
-        """
-        Create a general full-factorial design
-
-        Parameters
-        ----------
-        levels : array-like
-            An array of integers that indicate the number of levels of each input
-            design factor.
-
-        Returns
-        -------
-        mat : 2d-array
-            The design matrix with coded levels 0 to k-1 for a k-level factor
-
-        Example
-        -------
-        ::
-
-            >>> fullfact([2, 4, 3])
-            array([[ 0.,  0.,  0.],
-                   [ 1.,  0.,  0.],
-                   [ 0.,  1.,  0.],
-                   [ 1.,  1.,  0.],
-                   [ 0.,  2.,  0.],
-                   [ 1.,  2.,  0.],
-                   [ 0.,  3.,  0.],
-                   [ 1.,  3.,  0.],
-                   [ 0.,  0.,  1.],
-                   [ 1.,  0.,  1.],
-                   [ 0.,  1.,  1.],
-                   [ 1.,  1.,  1.],
-                   [ 0.,  2.,  1.],
-                   [ 1.,  2.,  1.],
-                   [ 0.,  3.,  1.],
-                   [ 1.,  3.,  1.],
-                   [ 0.,  0.,  2.],
-                   [ 1.,  0.,  2.],
-                   [ 0.,  1.,  2.],
-                   [ 1.,  1.,  2.],
-                   [ 0.,  2.,  2.],
-                   [ 1.,  2.,  2.],
-                   [ 0.,  3.,  2.],
-                   [ 1.,  3.,  2.]])
+    @staticmethod
+    def fullfact(levels):
 
         """
-        n = len(levels)  # number of factors
-        nb_lines = np.prod(levels)  # number of trial conditions
-        H = np.zeros((nb_lines, n))
+        Create a full-factorial design
+
+        Note: This function has been modified from pyDOE, released under BSD License (3-Clause)
+        Copyright (C) 2012 - 2013 - Michael Baudin
+        Copyright (C) 2012 - Maria Christopoulou
+        Copyright (C) 2010 - 2011 - INRIA - Michael Baudin
+        Copyright (C) 2009 - Yann Collette
+        Copyright (C) 2009 - CEA - Jean-Marc Martinez
+        Original source code can be found at:
+        https://pythonhosted.org/pyDOE/#
+        or
+        https://pypi.org/project/pyDOE/
+        or
+        https://github.com/tisimst/pyDOE/
+
+        Input:
+        :param levels: A list of integers that indicate the number of levels of each input design factor.
+        :type levels: list
+
+        Output:
+        :return ff: Full-factorial design matrix
+        :rtype ff: ndarray
+
+        """
+
+        # Number of factors
+        n_factors = len(levels)
+        # Number of combinations
+        n_comb = np.prod(levels)
+        ff = np.zeros((n_comb, n_factors))
 
         level_repeat = 1
         range_repeat = np.prod(levels)
-        for i in range(n):
+        for i in range(n_factors):
             range_repeat //= levels[i]
             lvl = []
             for j in range(levels[i]):
                 lvl += [j] * level_repeat
             rng = lvl * range_repeat
             level_repeat *= levels[i]
-            H[:, i] = rng
+            ff[:, i] = rng
 
-        return H
+        return ff
 
 
 ########################################################################################################################
@@ -773,11 +756,11 @@ class MCMC:
 
 
     Output:
-    :return: MCMC.samples:
-    :rtype: MCMC.samples: numpy array
+    :return: MCMC.samples: Set of MCMC samples following the target distribution
+    :rtype: MCMC.samples: ndarray
     """
 
-    # Authors: Mohit Chauhan, Dimitris Giovanis, Michael D. Shields
+    # Authors: Michael D. Shields, Mohit Chauhan, Dimitris G. Giovanis
     # Updated: 4/26/18 by Michael D. Shields
 
     def __init__(self, dimension=None, pdf_proposal_type=None, pdf_proposal_scale=None, pdf_target_type=None,
@@ -820,28 +803,51 @@ class MCMC:
                 if self.pdf_proposal_type[0] == 'Normal':
                     if self.dimension == 1:
                         candidate = normal(samples[i, :], np.array(self.pdf_proposal_scale))
+                        p_proposal = pdf_(candidate, self.pdf_target_params)
+                        p_current = pdf_(samples[i, :], self.pdf_target_params)
+                        p_accept = p_proposal / p_current
+
+                        accept = np.random.random() < p_accept
+
+                        if accept:
+                            samples[i + 1, :] = candidate
+                        else:
+                            samples[i + 1, :] = samples[i, :]
+                            rejects += 1
                     else:
                         if i == 0:
                             self.pdf_proposal_scale = np.diag(np.array(self.pdf_proposal_scale))
+
                         candidate = multivariate_normal(samples[i, :], np.array(self.pdf_proposal_scale))
+                        p_proposal = pdf_(candidate, self.pdf_target_params)
+                        p_current = pdf_(samples[i, :], self.pdf_target_params)
+                        p_accept = p_proposal / p_current
+
+                        accept = np.random.random() < p_accept
+
+                        if accept:
+                            samples[i + 1, :] = candidate
+                        else:
+                            samples[i + 1, :] = samples[i, :]
+                            rejects += 1
 
                 elif self.pdf_proposal_type == 'Uniform':
 
                     candidate = uniform(low=samples[i, :] - np.array(self.pdf_proposal_scale) / 2,
-                                                  high=samples[i, :] + np.array(self.pdf_proposal_scale) / 2,
-                                                  size=self.dimension)
+                                        high=samples[i, :] + np.array(self.pdf_proposal_scale) / 2,
+                                        size=self.dimension)
+                    p_proposal = pdf_(candidate, self.pdf_target_params)
 
-                p_proposal = pdf_(candidate, self.pdf_target_params)
-                p_current = pdf_(samples[i, :], self.pdf_target_params)
-                p_accept = p_proposal / p_current
+                    p_current = pdf_(samples[i, :], self.pdf_target_params)
+                    p_accept = p_proposal / p_current
 
-                accept = np.random.random() < p_accept
+                    accept = np.random.random() < p_accept
 
-                if accept:
-                    samples[i + 1, :] = candidate
-                else:
-                    samples[i + 1, :] = samples[i, :]
-                    rejects += 1
+                    if accept:
+                        samples[i + 1, :] = candidate
+                    else:
+                        samples[i + 1, :] = samples[i, :]
+                        rejects += 1
 
         ################################################################################################################
         # Modified Metropolis-Hastings Algorithm with symmetric proposal density
@@ -857,21 +863,31 @@ class MCMC:
 
                         if self.pdf_proposal_type[j] == 'Normal':
                             candidate = np.random.normal(samples[i, j], self.pdf_proposal_scale[j])
+                            p_proposal = pdf_(candidate, self.pdf_target_params)
+                            p_current = pdf_(samples[i, j], self.pdf_target_params)
+                            p_accept = p_proposal / p_current
+
+                            accept = np.random.random() < p_accept
+
+                            if accept:
+                                samples[i + 1, j] = candidate
+                            else:
+                                samples[i + 1, j] = samples[i, j]
 
                         elif self.pdf_proposal_type[j] == 'Uniform':
                             candidate = np.random.uniform(low=samples[i, j] - self.pdf_proposal_scale[j] / 2,
                                                           high=samples[i, j] + self.pdf_proposal_scale[j] / 2, size=1)
 
-                        p_proposal = pdf_(candidate, self.pdf_target_params)
-                        p_current = pdf_(samples[i, j], self.pdf_target_params)
-                        p_accept = p_proposal / p_current
+                            p_proposal = pdf_(candidate, self.pdf_target_params)
+                            p_current = pdf_(samples[i, j], self.pdf_target_params)
+                            p_accept = p_proposal / p_current
 
-                        accept = np.random.random() < p_accept
+                            accept = np.random.random() < p_accept
 
-                        if accept:
-                            samples[i + 1, j] = candidate
-                        else:
-                            samples[i + 1, j] = samples[i, j]
+                            if accept:
+                                samples[i + 1, j] = candidate
+                            else:
+                                samples[i + 1, j] = samples[i, j]
 
             elif self.pdf_target_type == 'joint_pdf':
                 pdf_ = self.pdf_target[0]
@@ -913,14 +929,14 @@ class MCMC:
 
             pdf_ = self.pdf_target[0]
 
-            for i in range(self.ensemble_size-1,self.nsamples * self.jump - 1):
-                complementary_ensemble = samples[i-self.ensemble_size+2:i+1,:]
-                S = random.choice(complementary_ensemble)
+            for i in range(self.ensemble_size-1, self.nsamples * self.jump - 1):
+                complementary_ensemble = samples[i-self.ensemble_size+2:i+1, :]
+                s0 = random.choice(complementary_ensemble)
                 s = (1+(self.pdf_proposal_scale[0]-1)*random.random())**2/self.pdf_proposal_scale[0]
-                candidate = S+s*(samples[i-self.ensemble_size+1,:]-S)
+                candidate = s0+s*(samples[i-self.ensemble_size+1, :]-s0)
 
                 p_proposal = pdf_(candidate, self.pdf_target_params)
-                p_current = pdf_(samples[i-self.ensemble_size+1, :], self.pdf_target_params)
+                p_current = pdf_(samples[i-self.ensemble_size + 1, :], self.pdf_target_params)
                 p_accept = s**(self.dimension-1)*p_proposal/p_current
 
                 accept = np.random.random() < p_accept
@@ -928,24 +944,22 @@ class MCMC:
                 if accept:
                     samples[i + 1, :] = candidate
                 else:
-                    samples[i + 1, :] = samples[i-self.ensemble_size+1, :]
+                    samples[i + 1, :] = samples[i-self.ensemble_size + 1, :]
 
         ################################################################################################################
         # Return the samples
 
         if self.algorithm is 'MMH' or self.algorithm is 'MH':
-            return samples[self.nburn:self.nsamples * self.jump +self.nburn:self.jump]
+            print('Successful execution of the MCMC design')
+            return samples[self.nburn:self.nsamples * self.jump + self.nburn:self.jump]
         else:
-            output = np.zeros((self.nsamples,self.dimension))
+            output = np.zeros((self.nsamples, self.dimension))
             j = 0
             for i in range(self.jump*self.ensemble_size-self.ensemble_size, samples.shape[0],
                            self.jump*self.ensemble_size):
-                output[j:j+self.ensemble_size,:] = samples[i:i+self.ensemble_size,:]
+                output[j:j+self.ensemble_size, :] = samples[i:i+self.ensemble_size, :]
                 j = j+self.ensemble_size
             return output
-
-        # TODO: Add Gibbs Sampler
-        # TODO: Add Affine Invariant with walk moves
 
     ####################################################################################################################
     # Check to ensure consistency of the user input and assign defaults
@@ -976,16 +990,16 @@ class MCMC:
         if self.pdf_proposal_type is None:
             self.pdf_proposal_type = 'Uniform'
         # If pdf_proposal_type is entered as a string, make it a list
-        if type(self.pdf_proposal_type).__name__=='str':
+        if type(self.pdf_proposal_type).__name__ == 'str':
             self.pdf_proposal_type = [self.pdf_proposal_type]
         for i in self.pdf_proposal_type:
             if i not in ['Uniform', 'Normal']:
                 raise ValueError('Exit code: Unrecognized type for proposal distribution. Supported distributions: '
                                  'Uniform, '
                                  'Normal.')
-        if self.algorithm is 'MH' and len(self.pdf_proposal_type)!=1:
+        if self.algorithm is 'MH' and len(self.pdf_proposal_type) != 1:
             raise ValueError('Exit code: MH algorithm can only take one proposal distribution.')
-        elif len(self.pdf_proposal_type)!=self.dimension:
+        elif len(self.pdf_proposal_type) != self.dimension:
             if len(self.pdf_proposal_type) == 1:
                 self.pdf_proposal_type = self.pdf_proposal_type * self.dimension
             else:
@@ -1012,8 +1026,7 @@ class MCMC:
             self.pdf_target_type = 'joint_pdf'
         if self.pdf_target_type not in ['joint_pdf', 'marginal_pdf']:
             raise ValueError('Exit code: Unrecognized type for target distribution. Supported distributions: '
-                                     'joint_pdf, '
-                                     'marginal_pdf.')
+                             'joint_pdf', 'marginal_pdf.')
 
         # Check algorithm
         if self.algorithm is None:
@@ -1038,7 +1051,7 @@ class MCMC:
                     self.pdf_target = [target] * self.dimension
             else:
                 def target(x, dummy):
-                    return sp.multivariate_normal.pdf(x,mean=np.zeros(self.dimension),cov=np.eye(self.dimension))
+                    return sp.multivariate_normal.pdf(x, mean=np.zeros(self.dimension), cov=np.eye(self.dimension))
                 self.pdf_target = [target]
         elif self.pdf_target is None:
             if self.dimension == 1:
@@ -1047,7 +1060,7 @@ class MCMC:
                 self.pdf_target = [target]
             else:
                 def target(x, dummy):
-                    return sp.multivariate_normal.pdf(x,mean=np.zeros(self.dimension),cov=np.eye(self.dimension))
+                    return sp.multivariate_normal.pdf(x, mean=np.zeros(self.dimension), cov=np.eye(self.dimension))
                 self.pdf_target = [target]
         elif type(self.pdf_target).__name__ != 'list':
             self.pdf_target = [self.pdf_target]
@@ -1055,12 +1068,11 @@ class MCMC:
         # Check pdf_target_params
         if self.pdf_target_params is None:
             self.pdf_target_params = []
-        if type(self.pdf_target_params).__name__!='list':
+        if type(self.pdf_target_params).__name__ != 'list':
             self.pdf_target_params = [self.pdf_target_params]
 
         if self.nburn is None:
             self.nburn = 0
-
 
 
 ########################################################################################################################
