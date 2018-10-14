@@ -1,375 +1,305 @@
+# UQpy is distributed under the MIT license.
+#
+# Copyright (C) 2018  -- Michael D. Shields
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+# persons to whom the Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+# Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+"""This module contains functionality for all the distribution supported in UQpy."""
+
 import scipy.stats as stats
-from scipy.special import erf
 from functools import partial
-import numpy as np
 import sys
 import os
+
+
+# Authors: Dimitris G.Giovanis, Michael D. Shields
+# Last Modified: 6/7/18 by Dimitris G. Giovanis
 
 
 ########################################################################################################################
 #        Define the probability distribution of the random parameters
 ########################################################################################################################
 
-def pdf(dist):
-    dir_ = os.getcwd()
-    sys.path.insert(0, dir_)
-    for i in range(len(dist)):
-        if type(dist[i]).__name__ == 'str':
-            if dist[i] == 'Uniform':
-                def f(x, params):
-                    return stats.uniform.pdf(x, params[0], params[1])
 
-                dist[i] = f
+class Distribution:
+    def __init__(self, name):
 
-            elif dist[i] == 'Normal':
-                def f(x, params):
-                    return stats.norm.pdf(x, params[0], params[1])
+        self.name = name
 
-                dist[i] = f
+        if self.name == 'Normal':
+            def pdf(x, params):
+                return stats.norm.pdf(x, params[0], params[1])
+            self.pdf = partial(pdf)
 
-            elif dist[i] == 'Lognormal':
-                def f(x, params):
-                    return stats.lognorm.pdf(x, params[0], params[1])
+            def cdf(x, params):
+                return stats.norm.cdf(x, params[0], params[1])
+            self.cdf = partial(cdf)
 
-                dist[i] = f
+            def icdf(x, params):
+                return stats.norm.ppf(x, params[0], params[1])
+            self.icdf = partial(icdf)
 
-            elif dist[i] == 'Weibull':
-                def f(x, params):
-                    return stats.weibull_min.pdf(x, params[0], params[1])
+            def moments(params):
 
-                dist[i] = f
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.norm.stats(scale=params[1],
+                                                         loc=params[0],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-            elif dist[i] == 'Beta':
-                def f(x, params):
-                    return stats.weibull_min.pdf(x, params[0], params[1], params[2], params[3])
+            self.moments = partial(moments)
 
-                dist[i] = f
+        elif self.name == 'Uniform':
+            def pdf(x, params):
+                loc = params[0]
+                scale = params[1] - params[0]
+                return stats.uniform.pdf(x, loc=loc, scale=scale)
+            self.pdf = partial(pdf)
 
-            elif dist[i] == 'Exponential':
-                def f(x, params):
-                    return stats.expon.pdf(x, params[0], params[1])
+            def cdf(x, params):
+                loc = params[0]
+                scale = params[1] - params[0]
+                return stats.uniform.cdf(x, loc=loc, scale=scale)
+            self.cdf = partial(cdf)
 
-                dist[i] = f
+            def icdf(x, params):
+                loc = params[0]
+                scale = params[1] - params[0]
+                return stats.uniform.ppf(x, loc=loc, scale=scale)
+            self.icdf = partial(icdf)
 
-            elif dist[i] == 'Gamma':
-                def f(x, params):
-                    return stats.gamma.pdf(x, params[0], params[1], params[2])
+            def moments(params):
 
-                dist[i] = f
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
 
-            elif os.path.isfile('custom_dist.py') is True:
-                import custom_dist
-                method_to_call = getattr(custom_dist, dist[i])
+                mean, var, skew, kurt = stats.uniform.stats(scale=params[1]-params[0],
+                                                            loc=params[0],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-                dist[i] = partial(method_to_call)
+            self.moments = partial(moments)
 
-            else:
-                raise NotImplementedError('Unidentified pdf_type')
+        elif self.name == 'Binomial':
 
-    return dist
+            def pdf(x, params):
+                return stats.binom.pdf(x, n=params[0], p=params[1])
+            self.pdf = partial(pdf)
 
-# TODO: Add a library of pdfs here.
+            def cdf(x, params):
+                return stats.binom.cdf(x, n=params[0], p=params[1])
+            self.cdf = partial(cdf)
 
+            def icdf(x, params):
+                return stats.binom.ppf(x, n=params[0], p=params[1])
+            self.icdf = partial(icdf)
 
-def cdf(dist):
-    dir_ = os.getcwd()
-    sys.path.insert(0, dir_)
-    for i in range(len(dist)):
-        if type(dist[i]).__name__ == 'str':
-            if dist[i] == 'Uniform':
-                def f(x, params):
-                    return stats.uniform.cdf(x, params[0], params[1])
+            def moments(params):
 
-                dist[i] = f
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
 
-            elif dist[i] == 'Normal':
-                def f(x, params):
-                    return stats.norm.cdf(x, params[0], params[1])
+                mean, var, skew, kurt = stats.binom.stats(n=params[0],
+                                                          p=params[0],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-                dist[i] = f
+            self.moments = partial(moments)
 
-            elif dist[i] == 'Lognormal':
-                def f(x, params):
-                    return stats.lognorm.cdf(x, params[0], params[1])
+        elif self.name == 'Beta':
 
-                dist[i] = f
+            def pdf(x, params):
+                return stats.beta.pdf(x, a=params[0], b=params[1])
+            self.pdf = partial(pdf)
 
-            elif dist[i] == 'Weibull':
-                def f(x, params):
-                    return stats.weibull_min.cdf(x, params[0], params[1])
+            def cdf(x, params):
+                return stats.beta.cdf(x, a=params[0], b=params[1])
+            self.cdf = partial(cdf)
 
-                dist[i] = f
+            def icdf(x, params):
+                return stats.beta.ppf(x, a=params[0], b=params[1])
+            self.icdf = partial(icdf)
 
-            elif dist[i] == 'Beta':
-                def f(x, params):
-                    return stats.weibull_min.cdf(x, params[0], params[1], params[2], params[3])
+            def moments(params):
 
-                dist[i] = f
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
 
-            elif dist[i] == 'Exponential':
-                def f(x, params):
-                    return stats.expon.cdf(x, params[0], params[1])
+                mean, var, skew, kurt = stats.beta.stats(a=params[0],
+                                                         b=params[0],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-                dist[i] = f
+            self.moments = partial(moments)
 
-            elif dist[i] == 'Gamma':
-                def f(x, params):
-                    return stats.gamma.cdf(x, params[0], params[1], params[2])
+        elif self.name == 'Gumbel':
 
-                dist[i] = f
+            def pdf(x, params):
+                return stats.genextreme.pdf(x, c=0, loc=params[0], scale=params[1])
+            self.pdf = partial(pdf)
 
-            elif os.path.isfile('custom_dist.py') is True:
-                import custom_dist
-                method_to_call = getattr(custom_dist, dist[i])
+            def cdf(x, params):
+                return stats.genextreme.cdf(x, c=0, loc=params[0], scale=params[1])
+            self.cdf = partial(cdf)
 
-                dist[i] = partial(method_to_call)
+            def icdf(x, params):
+                return stats.genextreme.ppf(x, c=0, loc=params[0], scale=params[1])
+            self.icdf = partial(icdf)
 
-            else:
-                raise NotImplementedError('Unidentified pdf_type')
+            def moments(params):
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.genextreme.stats(c=0, scale=params[1],
+                                                               loc=params[0],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-    return dist
+            self.moments = partial(moments)
 
+        elif self.name == 'Chisquare':
 
-def inv_cdf(dist):
-    dir_ = os.getcwd()
-    sys.path.insert(0, dir_)
-    for i in range(len(dist)):
-        if type(dist[i]).__name__ == 'str':
-            if dist[i] == 'Uniform':
-                def f(x, params):
-                    return stats.uniform.ppf(x, params[0], params[1])
+            def pdf(x, params):
+                return stats.chi2.pdf(x, params[0])
+            self.pdf = partial(pdf)
 
-                dist[i] = f
+            def cdf(x, params):
+                return stats.chi2.cdf(x, params[0])
+            self.cdf = partial(cdf)
 
-            elif dist[i] == 'Normal':
-                def f(x, params):
-                    return stats.norm.ppf(x, params[0], params[1])
+            def icdf(x, params):
+                return stats.chi2.ppf(x, params[0])
+            self.icdf = partial(icdf)
 
-                dist[i] = f
+            def moments(params):
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.chi2.stats(a=params[0]/2.0,
+                                                         scale=2,  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-            elif dist[i] == 'Lognormal':
-                def f(x, params):
-                    return stats.lognorm.ppf(x, params[0], params[1])
+            self.moments = partial(moments)
 
-                dist[i] = f
+        elif self.name == 'Lognormal':
 
-            elif dist[i] == 'Weibull':
-                def f(x, params):
-                    return stats.weibull_min.ppf(x, params[0], params[1])
+            def pdf(x, params):
+                import numpy as np
+                return stats.lognorm.pdf(x, s=params[1], scale=np.exp(params[0]))
+            self.pdf = partial(pdf)
 
-                dist[i] = f
+            def cdf(x, params):
+                import numpy as np
+                return stats.lognorm.cdf(x, s=params[1], scale=np.exp(params[0]))
+            self.cdf = partial(cdf)
 
-            elif dist[i] == 'Beta':
-                def f(x, params):
-                    return stats.weibull_min.ppf(x, params[0], params[1], params[2], params[3])
+            def icdf(x, params):
+                import numpy as np
+                return stats.lognorm.ppf(x, s=params[1], scale=np.exp(params[0]))
+            self.icdf = partial(icdf)
 
-                dist[i] = f
+            def moments(params):
 
-            elif dist[i] == 'Exponential':
-                def f(x, params):
-                    return stats.expon.ppf(x, params[0], params[1])
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.lognorm.stats(s=params[1],
+                                                            scale=np.exp(params[0]),  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
 
-                dist[i] = f
+                return y
 
-            elif dist[i] == 'Gamma':
-                def f(x, params):
-                    return stats.gamma.ppf(x, params[0], params[1], params[2])
+            self.moments = partial(moments)
 
-                dist[i] = f
+        elif self.name == 'Gamma':
 
-            elif os.path.isfile('custom_dist.py') is True:
-                print('came here')
-                import custom_dist
-                method_to_call = getattr(custom_dist, dist[i])
+            def pdf(x, params):
+                return stats.gamma.pdf(x, a=params[0], scale=1/params[1])
+            self.pdf = partial(pdf)
 
-                dist[i] = partial(method_to_call)
+            def cdf(x, params):
+                return stats.gamma.cdf(x,  a=params[0], scale=1/params[1])
+            self.cdf = partial(cdf)
 
-            else:
-                raise NotImplementedError('Unidentified pdf_type')
+            def icdf(x, params):
+                return stats.gamma.ppf(x,  a=params[0], scale=1/params[1])
+            self.icdf = partial(icdf)
 
-    return dist
+            def moments(params):
 
-# ########################################################################################################################
-# #        Transform the random parameters from U(0, 1) to the original space
-# ########################################################################################################################
-#
-# def inv_cdf(x, pdf_type, params):
-#     x_trans = np.zeros(shape=(x.shape[0], x.shape[1]))
-#     ###################################################################################
-#     # U(0, 1)  ---->  U(a, b)
-#
-#     for i in range(x.shape[1]):
-#         if pdf_type[i] == 'Uniform':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.uniform.ppf(x[j, i], params[i][0], params[i][1])
-#
-#         ###################################################################################
-#         # U(0, 1)  ---->  N(μ, σ)
-#
-#         elif pdf_type[i] == 'Normal':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.norm.ppf(x[j, i], params[i][0], params[i][1])
-#
-#         ####################################################################################
-#         # U(0, 1)  ---->  LN(μ, σ)
-#
-#         elif pdf_type[i] == 'Lognormal':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.lognorm.ppf(x[j, i], params[i][0], params[i][1])
-#
-#         ####################################################################################
-#         # U(0, 1)  ---->  Weibull(λ, κ)
-#
-#         elif pdf_type[i] == 'Weibull':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.weibull_min.ppf(x[j, i], params[i][0], params[i][1])
-#
-#         ####################################################################################
-#         # U(0, 1)  ---->  Beta(q, r, a, b)
-#
-#         elif pdf_type[i] == 'Beta':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.beta.ppf(x[j, i], params[i][0], params[i][1], params[i][2], params[i][3])
-#
-#         ####################################################################################
-#         # U(0, 1)  ---->  Exp(λ)
-#
-#         elif pdf_type[i] == 'Exponential':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.expon.ppf(x[j, i], params[i][0])
-#
-#         ####################################################################################
-#         # U(0, 1)  ---->  Gamma(λ-shape, shift, scale )
-#
-#         elif pdf_type[i] == 'Gamma':
-#             for j in range(x.shape[0]):
-#                 x_trans[j, i] = stats.gamma.ppf(x[j, i], params[i][0], params[i][1], params[i][2])
-#
-#     return x_trans
-#
-#
-# ########################################################################################################################
-# #        Get probability of a pdf
-# ########################################################################################################################
-#
-# def prob_pdf(x, pdf_type, params):
-#     prob = np.zeros(shape=(x.shape[0], x.shape[1]))
-#
-#     for i in range(x.shape[1]):
-#         if pdf_type[i] == 'Uniform':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.uniform.pdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Normal':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.norm.pdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Lognormal':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.lognorm.pdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Weibull':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.weibull_min.pdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Beta':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.beta.pdf(x[j, i], params[i][0], params[i][1], params[i][2], params[i][3])
-#
-#         elif pdf_type[i] == 'Exponential':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.expon.pdf(x[j, i], params[i][0])
-#
-#         elif pdf_type[i] == 'Gamma':
-#             for j in range(x.shape[0]):
-#                 prob[j, i] = stats.gamma.pdf(x[j, i], params[i][0], params[i][1], params[i][2])
-#
-#     return prob
-#
-#
-# ########################################################################################################################
-# #        Get cumulative probability of a pdf
-# ########################################################################################################################
-#
-# def prob_cdf(x, pdf_type, params):
-#     prob_c = np.zeros(shape=(x.shape[0], x.shape[1]))
-#
-#     for i in range(x.shape[1]):
-#         if pdf_type[i] == 'Uniform':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.uniform.cdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Normal':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.norm.cdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Lognormal':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.lognorm.cdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Weibull':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.weibull_min.cdf(x[j, i], params[i][0], params[i][1])
-#
-#         elif pdf_type[i] == 'Beta':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.beta.cdf(x[j, i], params[i][0], params[i][1], params[i][2], params[i][3])
-#
-#         elif pdf_type[i] == 'Exponential':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.expon.cdf(x[j, i], params[i][0])
-#
-#         elif pdf_type[i] == 'Gamma':
-#             for j in range(x.shape[0]):
-#                 prob_c[j, i] = stats.gamma.cdf(x[j, i], params[i][0], params[i][1], params[i][2])
-#
-#     return prob_c
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.gamma.stats(a=params[0],
+                                                          scale=1/params[1],  moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
 
-# ########################################################################################################################
-#             Log pdf (used in inference)
-# ######################################################################################################################
-#
-# def log_normal(data, fitted_params_norm):
-#     loglike = np.sum(stats.norm.logpdf(data, loc=fitted_params_norm[0], scale=fitted_params_norm[1]))
-#     k = 2
-#     return k, loglike
-#
-#
-# def log_cauchy(data, fitted_params_cauchy):
-#     loglike = np.sum(stats.cauchy.logpdf(data, loc=fitted_params_cauchy[0], scale=fitted_params_cauchy[1]))
-#     k = 2
-#     return k, loglike
-#
-#
-# def log_exp(data, fitted_params_expon):
-#     loglike = np.sum(stats.expon.logpdf(data, loc=fitted_params_expon[0], scale=fitted_params_expon[1]))
-#     k = 2
-#     return k, loglike
-#
-#
-# def log_log(data, fitted_params_logn):
-#     loglike = np.sum(stats.lognorm.logpdf(data, s=fitted_params_logn[0], loc=fitted_params_logn[1],
-#                                           scale=fitted_params_logn[2]))
-#     k = 3
-#     return k, loglike
-#
-#
-# def log_gamma(data, fitted_params_gamma):
-#     loglike = np.sum(stats.gamma.logpdf(data, a=fitted_params_gamma[0], loc=fitted_params_gamma[1],
-#                                         scale=fitted_params_gamma[2]))
-#     k = 3
-#     return k, loglike
-#
-#
-# def log_invgauss(data, fitted_params_invgauss):
-#     loglike = np.sum(stats.invgauss.logpdf(data, mu=fitted_params_invgauss[0], loc=fitted_params_invgauss[1],
-#                                            scale=fitted_params_invgauss[2]))
-#     k = 3
-#     return k, loglike
-#
-#
-# def log_logistic(data, fitted_params_logistic):
-#     loglike = np.sum(
-#         stats.logistic.logpdf(data, loc=fitted_params_logistic[0], scale=fitted_params_logistic[1]))
-#     k = 2
-#     return k, loglike
+            self.moments = partial(moments)
+
+        elif self.name == 'Exponential':
+            def pdf(x, params):
+                return stats.expon.pdf(x, params[0], scale=1/params[0])
+            self.pdf = partial(pdf)
+
+            def cdf(x, params):
+                return stats.expon.cdf(x, params[0], scale=1/params[0])
+            self.cdf = partial(cdf)
+
+            def icdf(x, params):
+                return stats.expon.ppf(x, params[0], scale=1/params[0])
+            self.icdf = partial(icdf)
+
+            def moments(params):
+
+                import numpy as np
+                y = [np.nan, np.nan, np.nan, np.nan]
+                mean, var, skew, kurt = stats.expon.stats(scale=1 / params[0], moments='mvsk')
+                y[0] = mean
+                y[1] = var
+                y[2] = skew
+                y[3] = kurt
+                return y
+
+            self.moments = partial(moments)
+
+        elif os.path.isfile('custom_dist.py') is True:
+            import custom_dist
+            self.pdf = getattr(custom_dist, 'pdf')
+            self.cdf = getattr(custom_dist, 'cdf')
+            self.icdf = getattr(custom_dist, 'icdf')
+            self.moments = getattr(custom_dist, 'moments')
+

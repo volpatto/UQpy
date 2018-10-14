@@ -1,9 +1,25 @@
-import UQpy.Distributions
+# UQpy is distributed under the MIT license.
+#
+# Copyright (C) 2018  -- Michael D. Shields
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+# persons to whom the Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+# Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+"""This module contains functionality for all the reliability methods supported in UQpy."""
+
 from UQpy.RunModel import RunModel
 from UQpy.SampleMethods import MCMC
 import numpy as np
-import warnings
-import time
 
 
 ########################################################################################################################
@@ -12,7 +28,7 @@ import time
 ########################################################################################################################
 class SubsetSimulation:
     """
-    A class used to perform Subset Simulation.
+    Perform Subset Simulation.
 
     This class estimates probability of failure for a user-defined model using Subset Simulation
 
@@ -20,17 +36,19 @@ class SubsetSimulation:
     S.-K. Au and J. L. Beck, “Estimation of small failure probabilities in high dimensions by subset simulation,”
         Probabilistic Eng. Mech., vol. 16, no. 4, pp. 263–277, Oct. 2001.
 
+
     Input:
+
     :param dimension:  A scalar value defining the dimension of target density function.
-                    Default: 1
+                       Default: 1
     :type dimension: int
 
-    :param nsamples_ss: Number of samples to generate in each conditional subset
+    :param nsamples_ss: Number of samples to generate in each conditional subset.
                         No Default Value: nsamples_ss must be prescribed
     :type nsamples_ss: int
 
-    :param p_cond: Conditional probability at each level
-                        Default: p_cond = 0.1
+    :param p_cond: Conditional probability at each level.
+                   Default: p_cond = 0.1
     :type p_cond: float
 
     :param algorithm:  Algorithm used to generate MCMC samples.
@@ -125,17 +143,19 @@ class SubsetSimulation:
                           If model_type = 'python', this is not used.
     :type output_script: str
 
+    :param samples_init: Intial samples drawn from the target probability density
+    :type samples_init: ndarray
+
     Output:
 
-    :param pf: Probability of failure estimate
-    :type pf: float
+    :return self.pf: Probability of failure estimate
+    :rtype self.pf: float
+    :return self.cov: Coefficient of variation
+    :rtype self.cov: float
     """
 
-    # Created by: Dimitris G.Giovanis, Michael D. Shields
-    # Modified: 12 / 08 / 2017
-    # Modified by: Dimitris G. Giovanis
-    # Modified: 5 / 15 / 2018
-    # Modified by: Michael D. Shields
+    # Authors: Dimitris G.Giovanis, Michael D. Shields
+    # Last Modified: 6/7/18 by Dimitris G. Giovanis
 
     def __init__(self, dimension=None, samples_init=None, nsamples_ss=None, p_cond=None, pdf_target_type=None,
                  pdf_target=None, pdf_target_params=None, pdf_proposal_type=None, pdf_proposal_scale=None,
@@ -159,8 +179,6 @@ class SubsetSimulation:
         self.samples = list()
         self.g_level = list()
         self.delta2 = list()
-        self.pf = np.empty(1)
-        self.cov = np.empty(1)
 
         # Hard-wire the maximum number of conditional levels.
         self.max_level = 20
@@ -170,11 +188,11 @@ class SubsetSimulation:
 
         # Select the appropriate Subset Simulation Algorithm
         if self.algorithm == 'MMH':
-            self.run_subsim_mmh()
+            print('UQpy: Running Subset Simulation....')
+            [self.pf, self.cov] = self.run_subsim_mmh()
         elif self.algorithm == 'Stretch':
-            self.run_subsim_stretch()
-
-        # TODO: DG - Add coefficient of variation estimator for subset simulation
+            self.pf = self.run_subsim_stretch()
+        print('Done!')
 
     def run_subsim_mmh(self):
         step = 0
@@ -184,8 +202,8 @@ class SubsetSimulation:
         if self.samples_init is None:
             x_init = MCMC(dimension=self.dimension, pdf_proposal_type=self.pdf_proposal_type,
                           pdf_proposal_scale=self.pdf_proposal_scale, pdf_target_type=self.pdf_target_type,
-                          pdf_target = self.pdf_target, pdf_target_params = self.pdf_target_params,
-                          algorithm=self.algorithm, nsamples=self.nsamples_ss, seed=np.zeros((self.dimension)))
+                          pdf_target=self.pdf_target, pdf_target_params=self.pdf_target_params,
+                          algorithm=self.algorithm, nsamples=self.nsamples_ss, seed=np.zeros(self.dimension))
             self.samples.append(x_init.samples)
         else:
             self.samples.append(self.samples_init)
@@ -196,6 +214,7 @@ class SubsetSimulation:
         self.g.append(np.asarray(g_init.model_eval.QOI))
         g_ind = np.argsort(self.g[step])
         self.g_level.append(self.g[step][g_ind[n_keep]])
+
         # Estimate coefficient of variation of conditional probability of first level
         self.delta2.append(self.cov_sus(step)**2)
 
@@ -210,11 +229,11 @@ class SubsetSimulation:
 
                 x_mcmc = MCMC(dimension=self.dimension, pdf_proposal_type=self.pdf_proposal_type,
                               pdf_proposal_scale=self.pdf_proposal_scale, pdf_target_type=self.pdf_target_type,
-                              pdf_target = self.pdf_target, pdf_target_params = self.pdf_target_params,
+                              pdf_target=self.pdf_target, pdf_target_params=self.pdf_target_params,
                               algorithm=self.algorithm, nsamples=2, seed=seed)
 
                 x_temp = x_mcmc.samples[1].reshape((1, self.dimension))
-                g_model = RunModel(samples = x_temp, cpu=1, model_type=self.model_type, model_script=self.model_script,
+                g_model = RunModel(samples=x_temp, cpu=1, model_type=self.model_type, model_script=self.model_script,
                                    input_script=self.input_script, output_script=self.output_script,
                                    dimension=self.dimension)
 
@@ -223,7 +242,7 @@ class SubsetSimulation:
                 # Accept or reject the sample
                 if g_temp < self.g_level[step - 1]:
                     self.samples[step] = np.vstack((self.samples[step], x_temp))
-                    self.g[step] = np.hstack((self.g[step],g_temp[0]))
+                    self.g[step] = np.hstack((self.g[step], g_temp[0]))
                 else:
                     self.samples[step] = np.vstack((self.samples[step], self.samples[step][i]))
                     self.g[step] = np.hstack((self.g[step], self.g[step][i]))
@@ -234,10 +253,10 @@ class SubsetSimulation:
             self.delta2.append(self.cov_sus(step)**2)
 
         n_fail = len([value for value in self.g[step] if value < 0])
-        self.pf = self.p_cond**step*n_fail/self.nsamples_ss
-        self.cov = np.sum(self.delta2)
-        print(self.pf)
-        print(self.cov)
+        pf = self.p_cond**step*n_fail/self.nsamples_ss
+        cov = np.sum(self.delta2)
+
+        return pf, cov
 
     def run_subsim_stretch(self):
         step = 0
@@ -248,7 +267,7 @@ class SubsetSimulation:
             x_init = MCMC(dimension=self.dimension, pdf_proposal_type=self.pdf_proposal_type,
                           pdf_proposal_scale=self.pdf_proposal_scale, pdf_target_type=self.pdf_target_type,
                           pdf_target=self.pdf_target, pdf_target_params=self.pdf_target_params,
-                          algorithm='MMH', nsamples=self.nsamples_ss, seed=np.zeros((self.dimension)))
+                          algorithm='MMH', nsamples=self.nsamples_ss, seed=np.zeros(self.dimension))
             self.samples.append(x_init.samples)
         else:
             self.samples.append(self.samples_init)
@@ -261,7 +280,7 @@ class SubsetSimulation:
         g_ind = np.argsort(self.g[step])
         self.g_level.append(self.g[step][g_ind[n_keep]])
 
-        while self.g_level[step] > 0:
+        while self.g_level[step] > 0 and step < self.max_level:
 
             step = step + 1
             self.samples.append(self.samples[step - 1][g_ind[0:n_keep]])
@@ -295,8 +314,8 @@ class SubsetSimulation:
             self.g_level.append(self.g[step][g_ind[n_keep]])
 
         n_fail = len([value for value in self.g[step] if value < 0])
-        self.pf = self.p_cond ** step * n_fail / self.nsamples_ss
-        print(self.pf)
+        pf = self.p_cond ** step * n_fail / self.nsamples_ss
+        return pf
 
     def init_sus(self):
 
@@ -326,33 +345,155 @@ class SubsetSimulation:
                                       'specify the model using the model_script input.')
    
     def cov_sus(self, step):
-        N = self.g[step].size
+        n = self.g[step].size
         if step == 0:
-            di = np.sqrt((1 - self.p_cond) / (self.p_cond * N))
+            di = np.sqrt((1 - self.p_cond) / (self.p_cond * n))
         else:
-            nc = int(self.p_cond * N)
+            nc = int(self.p_cond * n)
             r_zero = self.p_cond * (1 - self.p_cond)
-            I = np.where(self.g[step] < self.g_level[step])
-            index = np.zeros(N)
-            index[I] = 1
-            indices = np.zeros(shape=(int(N / nc), nc)).astype(int)
-            for i in range(int(N / nc)):
+            index = np.zeros(n)
+            index[np.where(self.g[step] < self.g_level[step])] = 1
+            indices = np.zeros(shape=(int(n / nc), nc)).astype(int)
+            for i in range(int(n / nc)):
                 for j in range(nc):
                     if i == 0:
                         indices[i, j] = j
                     else:
                         indices[i, j] = indices[i - 1, j] + nc
             gamma = 0
-            rho = np.zeros(int(N / nc) - 1)
-            for k in range(int(N / nc) - 1):
+            rho = np.zeros(int(n / nc) - 1)
+            for k in range(int(n / nc) - 1):
                 z = 0
                 for j in range(int(nc)):
-                    for l in range(int(N / nc) - k):
+                    for l in range(int(n / nc) - k):
                         z = z + index[indices[l, j]] * index[indices[l + k, j]]
 
-                rho[k] = (1 / (N - k * nc) * z - self.p_cond ** 2) / r_zero
-                gamma = gamma + 2 * (1 - k * nc / N) * rho[k]
+                rho[k] = (1 / (n - k * nc) * z - self.p_cond ** 2) / r_zero
+                gamma = gamma + 2 * (1 - k * nc / n) * rho[k]
 
-            di = np.sqrt((1 - self.p_cond) / (self.p_cond * N) * (1 + gamma))
+            di = np.sqrt((1 - self.p_cond) / (self.p_cond * n) * (1 + gamma))
 
         return di
+
+########################################################################################################################
+########################################################################################################################
+#                                        First/Second order reliability method
+########################################################################################################################
+
+
+class TaylorSeries:
+
+    # Authors: Dimitris G.Giovanis
+    # Last Modified: 6/27/18 by Dimitris G. Giovanis
+
+    def __init__(self, dimension=None, dist_name=None, dist_params=None, nsamples=None, corr=None, method=None,
+                 init_design_point=None, algorithm=None, model_type=None, model_script=None, input_script=None,
+                 output_script=None, deriv_script=None):
+
+        self.dimension = dimension
+        self.dist_name = dist_name
+        self.dist_params = dist_params
+        self.nsamples = nsamples
+        self.corr = corr
+        self.init_design_point = init_design_point
+        self.method = method
+        self.algorithm = algorithm
+        self.model_type = model_type
+        self.model_script = model_script
+        self.input_script = input_script
+        self.output_script = output_script
+        self.deriv_script = deriv_script
+
+        if self.method == 'FORM':
+            print('Running FORM...')
+        elif self.method == 'SORM':
+            print('Running SORM...')
+
+        if self.algorithm == 'HL':
+            [self.u_star, self.x_star, self.beta, self.Pf, self.iterations] = self.form_hl()
+
+    def form_hl(self):
+
+        # Hasofer-Lind (HL) algorithm
+        import scipy as sp
+        n = self.dimension  # number of random variables (dimension)
+
+        # initialization
+        max_iter = int(1e3)
+        tol = 1e-5
+        # Correlation matrix of the random variables in the original space
+        u = np.zeros([max_iter+1, n])
+        beta = np.zeros(max_iter)
+
+        # HL method
+        for k in range(max_iter):
+
+            if k == 0:
+                u[k, :] = np.array(self.init_design_point)
+
+            from UQpy.SampleMethods import InvNataf
+            dist = InvNataf(samples=u[k, :], dimension=self.dimension, marginal_name=self.dist_name,
+                            corr=self.corr, marginal_params=self.dist_params)
+
+            # 1. evaluate Limit State Function at point
+            g = RunModel(samples=dist.samples_z, model_type=self.model_type, model_script=self.model_script,
+                         input_script=self.input_script, output_script=self.output_script,
+                         dimension=self.dimension)
+
+            # 2. evaluate Limit State Function gradient at point u_k and direction cosines
+            if self.deriv_script is None:
+                raise RuntimeError('A python script that provides the derivatives of the limit state function'
+                                   'is required for the Hasofer-Lind method.')
+            else:
+                dg = RunModel(samples=dist.samples_z.reshape(self.dimension), model_type=self.model_type,
+                              model_script=self.deriv_script, input_script=self.input_script,
+                              output_script=self.output_script, dimension=self.dimension)
+
+            A = np.linalg.solve(dist.Jacobian[0], dg.model_eval.Grad)
+            norm_g = sp.linalg.norm(A)
+            alpha = A / norm_g
+            alpha = alpha.squeeze()
+
+            if self.method == 'FORM':
+                # 3. calculate first order beta
+                beta[k] = -np.inner(u[k, :].T, alpha) + g.model_eval.QOI[0] / norm_g
+                # 4. calculate u_{k+1}
+                u[k + 1, :] = -beta[k] * alpha
+                # next iteration
+                if np.linalg.norm(u[k + 1, :] - u[k, :]) <= tol:
+                    break
+
+            if self.method == 'SORM':
+
+                # 3. calculate first order beta
+                beta_ = -np.inner(u[k, :].T, alpha) + g.model_eval.QOI[0] / norm_g
+                Q = np.identity(n=self.dimension)
+                Q[:, -1] = u[k, :].T
+                [Q, R] = np.linalg.qr(Q)
+                Q = np.fliplr(Q)
+                B = np.dot(np.dot(Q.T, dg.model_eval.Hessian), Q)
+                J = np.identity(n=self.dimension-1) + beta_*B[:self.dimension-1, :self.dimension-1]/norm_g
+                correction = 1/np.sqrt(np.linalg.det(J))
+                pf = sp.stats.norm.cdf(-beta_)*correction
+                beta[k] = -sp.stats.norm.ppf(pf)  # corrected index for second-order
+
+                # 4. calculate u_{k+1}
+                u[k + 1, :] = -beta[k] * alpha
+                # next iteration
+                if np.linalg.norm(u[k + 1, :] - u[k, :]) <= tol:
+                    break
+
+        # delete unnecessary data
+        u = u[:k + 1, :]
+
+        # compute design point, reliability index and Pf
+        u_star = u[-1, :]
+        from UQpy.SampleMethods import Nataf
+        dist_star = Nataf(samples=u_star, marginal_name=self.dist_name,
+                          marginal_params=self.dist_params, corr_norm=dist.corr_norm)
+
+        x_star = dist_star.samples_x
+        beta = beta[k]
+        pf = sp.stats.norm.cdf(-beta)
+
+        return u_star, x_star[0], beta, pf, k
