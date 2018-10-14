@@ -24,6 +24,7 @@ import random
 from UQpy.Distributions import *
 from UQpy.Utilities import *
 
+
 ########################################################################################################################
 ########################################################################################################################
 #                                         Monte Carlo simulation
@@ -618,6 +619,215 @@ class Strata:
             ff[:, i] = rng
 
         return ff
+
+
+########################################################################################################################
+########################################################################################################################
+#                                         Refined Stratified Sampling (RSS)
+########################################################################################################################
+class RSS:
+    """
+
+    """
+
+    # Authors: Mohit S. Chauhan
+    # Last modified: 7/17/2018 by Mohit S. Chauhan
+
+    def __init__(self, x=None, func=None, option='Refined', meta='Kriging', strata='Rectangular', nSamples=None,
+                 cut_type=None, min_train_size=None, step_size=None, corr_model=None):
+
+        _dict = {**x.__dict__}
+        for k, v in _dict.items():
+            setattr(self, k, v)
+
+        self.func = func
+        self.option = option
+        self.meta = meta
+        self.starta = strata
+        self.nSamples = nSamples
+        self.cut_type = cut_type
+        self.min_train_size = min_train_size
+        self.step_size = step_size
+        self.corr_model = corr_model
+        self.corr_model_params = 0
+        self.init_rss()
+        self.samples, self.samplesU01, self.strata.origins, self.strata.widths, self.strata.weights = self.run_rss()
+
+    def run_rss(self):
+
+        print('UQpy: Performing RSS design...')
+
+        def cent_diff(f, x, h):
+            dydx = np.zeros((np.size(x, 0), np.size(x, 1)))
+            for dir in range(np.size(x, 1)):
+                temp = np.zeros((np.size(x, 0), np.size(x, 1)))
+                temp[:, dir] = np.ones(np.size(x, 0))
+                low = x - h / 2 * temp
+                hi = x + h / 2 * temp
+                dydx[:, dir] = (f.__call__(hi) - f.__call__(low)) / h
+                # for j in range(np.size(x, 0)):
+                #     dydx[j, dir] = (f.__call__(hi[j, :]) - f.__call__(low[j, :])) / h
+
+            return dydx
+
+        samples = self.samples
+        samplesU01 = self.samplesU01
+        origins = self.strata.origins
+        widths = self.strata.widths
+        weights = self.strata.weights
+        if self.option == 'Gradient':
+            y = self.func(samples)
+            if self.meta == 'Delaunay':
+                # Fit the surrogate model
+                from scipy.interpolate import LinearNDInterpolator
+                tck = LinearNDInterpolator(samples, y)
+                xt = origins + 0.5 * widths
+                dydx = cent_diff(tck, xt, self.step_size)
+            elif self.meta == 'Kriging':
+                from UQpy.Surrogates import Krig
+                tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model)
+                tmp_param = tck.corr_model_params
+                xt = origins + 0.5 * widths
+                dydx = cent_diff(tck.interpolate, xt, self.step_size)
+
+        initial_s = np.size(samplesU01, 0)
+        for i in range(initial_s, self.nSamples):
+            print(i)
+            # Determine the stratum to break
+            if self.option == 'Gradient':
+                # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
+                # All input variables are independent
+                var = (1/12)*widths**2
+                # print('variance', var)
+                # print('gradient', dydx)
+                # Estimate the variance over the stratum by Delta Method
+                s = np.zeros([i, 1])
+                p = np.prod(widths, 1)
+                for j in range(i):
+                    s[j, 0] = np.sum(dydx[j, :] * var[j, :] * dydx[j, :] * (p[j]**2))
+                bin2break = np.argmax(s)
+                # print(bin2break)
+
+            elif self.option == 'Refined':
+                w = np.argwhere(weights == np.amax(weights))
+                bin2break = w[np.random.randint(len(w))]
+                self.cut_type = 0
+
+            # Determine the largest dimension of the stratum and define this as the cut direction
+            if self.cut_type == 0:
+                # Cut the stratum in a random direction
+                cut_dir_temp = widths[bin2break, :]
+                t = np.argwhere(cut_dir_temp[0] == np.amax(cut_dir_temp[0]))
+                dir2break = t[np.random.randint(len(t))]
+            elif self.cut_type == 1:
+                # Cut the stratum in the direction of maximum gradient
+                cut_dir_temp = widths[bin2break, :]
+                t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
+                if len(t) != 1:
+                    dir2break = np.argmax(abs(dydx[bin2break, t]))
+                else:
+                    dir2break = t
+            elif self.cut_type == 2:
+                # Cut stratum in direction of maximum gradient
+                dir2break = np.argmax(abs(dydx[bin2break, :]))
+
+            # Divide the stratum bin2break in the direction dir2break
+            # print('Bin to break =', bin2break, 'Direction to break =',  dir2break)
+            widths[bin2break, dir2break] = widths[bin2break, dir2break] / 2
+            widths = np.vstack([widths, widths[bin2break, :]])
+
+            origins = np.vstack([origins, origins[bin2break, :]])
+            if samplesU01[bin2break, dir2break] < origins[i, dir2break] + widths[bin2break, dir2break]:
+                origins[i, dir2break] = origins[i, dir2break] + widths[bin2break, dir2break]
+            else:
+                origins[bin2break, dir2break] = origins[bin2break, dir2break] + widths[bin2break, dir2break]
+
+            weights[bin2break] = weights[bin2break] / 2
+            weights = np.append(weights, weights[bin2break])
+
+            # Add a sample in the newly defined empty stratum
+            new = np.random.uniform(origins[i, :], origins[i, :] + widths[i, :])
+            samplesU01 = np.vstack([samplesU01, new])
+            for j in range(0, self.dimension):
+                icdf = self.dist[j].icdf
+                new[j] = icdf(new[j], self.dist_params[j])
+            samples = np.vstack([samples, new])
+
+            if self.option == 'Gradient':
+                y = self.func(samples)
+                surr_update = 'global'
+                if np.size(samplesU01, 0) > self.min_train_size:
+                    surr_update = 'local'
+
+                if surr_update == 'global':
+                    # Global surrogate updating: Update the surrogate model using all the points
+                    if self.meta == 'Delaunay':
+                        from scipy.interpolate import LinearNDInterpolator
+                        tck = LinearNDInterpolator(samples, y)
+                        xt = origins + 0.5 * widths
+                        dydx = cent_diff(tck, xt, self.step_size)
+                    elif self.meta == 'Kriging':
+                        from UQpy.Surrogates import Krig
+                        tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model,
+                                   corr_model_params=tmp_param)
+                        tmp_param = tck.corr_model_params
+                        xt = origins + 0.5 * widths
+                        dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                else:
+                    # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
+                    # in a box surrounding the new sample points
+
+                    # Define the points to be used for the surrogate training
+                    max_dim = np.amax(widths)
+                    ff = 2
+                    ind_train = []
+                    while np.size(ind_train) < self.min_train_size:
+                        import numpy.matlib as matlib
+                        x_ind = np.less_equal(matlib.repmat(np.maximum(samplesU01[i, :]-ff*max_dim, np.zeros(
+                            [self.dimension])), i+1, 1), samplesU01) & np.greater_equal(matlib.repmat(np.maximum(
+                             samplesU01[i, :]+ff*max_dim, np.ones([self.dimension])), i+1, 1), samplesU01)
+                        ind_train = []
+                        for k in range(i):
+                            if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
+                                ind_train.append(k)
+                        ff = ff + 1
+
+                    # Define the points whose gradients will be updated
+                    ff = 2
+                    ind_update = []
+                    while np.size(ind_update) < self.min_train_size/2:
+                        import numpy.matlib as matlib
+                        x_ind = np.less_equal(matlib.repmat(np.maximum(samplesU01[i, :] - ff * max_dim, np.zeros(
+                            [self.dimension])), i + 1, 1), samplesU01) & np.greater_equal(matlib.repmat(np.maximum(
+                            samplesU01[i, :] + ff * max_dim, np.ones([self.dimension])), i + 1, 1), samplesU01)
+                        ind_update = []
+                        for k in range(i):
+                            if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
+                                ind_update.append(k)
+                        ff = ff + 1
+
+                    # Update the surrogate model & the associated stored gradients
+                    dydx = np.vstack([dydx, np.zeros(self.dimension)])
+                    if self.meta == 'Delaunay':
+                        tck = LinearNDInterpolator(samples[ind_train, :], y[ind_train, :])
+                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
+                        dydx[ind_update, :] = cent_diff(tck, xt, self.step_size)
+                    elif self.meta == 'Kriging':
+                        from UQpy.Surrogates import Krig
+                        tck = Krig(samples=samples[ind_train, :], values=y[ind_train], reg_model='Quadratic',
+                                   corr_model=self.corr_model)
+                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
+                        dydx[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
+            if self.option == 'Gradient':
+                self.corr_model_params = tck.corr_model_params
+
+        print('Done!')
+        return samples, samplesU01, origins, widths, weights
+
+    def init_rss(self):
+        if self.option not in ['Refined', 'Gradient']:
+            raise NotImplementedError("Exit code: Does not identify 'option'.")
+
 
 
 ########################################################################################################################
