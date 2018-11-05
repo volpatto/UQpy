@@ -441,7 +441,7 @@ class STS:
         for i in range(self.dimension):
             self.distribution[i] = Distribution(self.dist_name[i], self.dist_params[i])
         self.samplesU01, self.samples = self.run_sts()
-        del self.dist_name, self.dist_params
+        del self.dist_name
 
     def run_sts(self):
         samples = np.empty([self.strata.origins.shape[0], self.strata.origins.shape[1]], dtype=np.float32)
@@ -695,21 +695,28 @@ class RSS:
         if self.option == 'Gradient':
             y = self.func(samples)
             if self.meta == 'Delaunay':
+                print('hi')
                 # Fit the surrogate model
-                from scipy.interpolate import LinearNDInterpolator
-                tck = LinearNDInterpolator(samples, y)
-                xt = origins + 0.5 * widths
-                dydx = cent_diff(tck, xt, self.step_size)
+                # from scipy.interpolate import LinearNDInterpolator
+                # tck = LinearNDInterpolator(samples, y)
+                # xt = origins + 0.5 * widths
+                # dydx = cent_diff(tck, xt, self.step_size)
             elif self.meta == 'Kriging':
                 from UQpy.Surrogates import Krig
                 tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model)
                 tmp_param = tck.corr_model_params
                 xt = origins + 0.5 * widths
-                dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                # dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                dydx1 = tck.jacobian(xt)
+                # dydx2 = cent_diff(self.func, xt, self.step_size)
 
         initial_s = np.size(samplesU01, 0)
+        import time
+        tim = np.zeros([self.nSamples-initial_s, 1])
+        num = np.zeros([self.nSamples - initial_s, 1])
         for i in range(initial_s, self.nSamples):
             print(i)
+            start_time = time.time()
             # Determine the stratum to break
             if self.option == 'Gradient':
                 # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
@@ -719,9 +726,8 @@ class RSS:
                 # print('gradient', dydx)
                 # Estimate the variance over the stratum by Delta Method
                 s = np.zeros([i, 1])
-                p = np.prod(widths, 1)
                 for j in range(i):
-                    s[j, 0] = np.sum(dydx[j, :] * var[j, :] * dydx[j, :] * (p[j]**2))
+                    s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j]**2))
                 bin2break = np.argmax(s)
                 # print(bin2break)
 
@@ -741,7 +747,7 @@ class RSS:
                 cut_dir_temp = widths[bin2break, :]
                 t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
                 if len(t) != 1:
-                    dir2break = np.argmax(abs(dydx[bin2break, t]))
+                    dir2break = np.argmax(abs(dydx1[bin2break, t]))
                 else:
                     dir2break = t
             elif self.cut_type == 2:
@@ -766,7 +772,7 @@ class RSS:
             new = np.random.uniform(origins[i, :], origins[i, :] + widths[i, :])
             samplesU01 = np.vstack([samplesU01, new])
             for j in range(0, self.dimension):
-                icdf = self.dist[j].icdf
+                icdf = self.distribution[j].icdf
                 new[j] = icdf(new[j], self.dist_params[j])
             samples = np.vstack([samples, new])
 
@@ -789,12 +795,14 @@ class RSS:
                                    corr_model_params=tmp_param)
                         tmp_param = tck.corr_model_params
                         xt = origins + 0.5 * widths
-                        dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                        # dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                        dydx1 = tck.jacobian(xt)
                 else:
                     # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
                     # in a box surrounding the new sample points
 
                     # Define the points to be used for the surrogate training
+                    start_time12 = time.time()
                     max_dim = np.amax(widths)
                     ff = 2
                     ind_train = []
@@ -822,6 +830,7 @@ class RSS:
                             if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
                                 ind_update.append(k)
                         ff = ff + 1
+                    print(time.time() - start_time12)
 
                     # Update the surrogate model & the associated stored gradients
                     dydx = np.vstack([dydx, np.zeros(self.dimension)])
@@ -834,9 +843,20 @@ class RSS:
                         tck = Krig(samples=samples[ind_train, :], values=y[ind_train], reg_model='Quadratic',
                                    corr_model=self.corr_model)
                         xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
-                        dydx[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
+                        # dydx[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
+                        dydx1[ind_update, :] = tck.jacobian(xt)
             if self.option == 'Gradient':
                 self.corr_model_params = tck.corr_model_params
+            tim[i-initial_s] = time.time() - start_time
+            print(tim[i-initial_s])
+            num[i-initial_s] = i
+
+        import matplotlib.pyplot as plt
+        fi = plt.figure()
+        plt.xlabel("Number of points")
+        plt.ylabel("Time")
+        plt.plot(num, tim)
+        fi.savefig('Time200.png')
 
         print('Done!')
         return samples, samplesU01, origins, widths, weights
