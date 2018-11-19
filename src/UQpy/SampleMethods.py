@@ -23,6 +23,8 @@ import scipy.stats as sp
 import random
 from UQpy.Distributions import *
 from UQpy.Utilities import *
+from UQpy.Surrogates import Krig
+from sklearn.gaussian_process import GaussianProcessRegressor
 from os import sys
 
 
@@ -648,9 +650,9 @@ class RSS:
     """
 
     # Authors: Mohit S. Chauhan
-    # Last modified: 7/17/2018 by Mohit S. Chauhan
+    # Last modified: 11/11/2018 by Mohit S. Chauhan
 
-    def __init__(self, x=None, func=None, option='Refined', meta='Kriging', strata='Rectangular', nSamples=None,
+    def __init__(self, x=None, func=None, option='Refined', meta='Kriging_UQpy', strata='Rectangular', nSamples=None,
                  cut_type=None, min_train_size=None, step_size=None, corr_model=None):
 
         _dict = {**x.__dict__}
@@ -682,8 +684,6 @@ class RSS:
                 low = x - h / 2 * temp
                 hi = x + h / 2 * temp
                 dydx[:, dir] = (f.__call__(hi) - f.__call__(low)) / h
-                # for j in range(np.size(x, 0)):
-                #     dydx[j, dir] = (f.__call__(hi[j, :]) - f.__call__(low[j, :])) / h
 
             return dydx
 
@@ -694,6 +694,7 @@ class RSS:
         weights = self.strata.weights
         if self.option == 'Gradient':
             y = self.func(samples)
+
             if self.meta == 'Delaunay':
                 print('hi')
                 # Fit the surrogate model
@@ -701,35 +702,32 @@ class RSS:
                 # tck = LinearNDInterpolator(samples, y)
                 # xt = origins + 0.5 * widths
                 # dydx = cent_diff(tck, xt, self.step_size)
-            elif self.meta == 'Kriging':
-                from UQpy.Surrogates import Krig
-                tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model)
+            elif self.meta == 'Kriging_UQpy':
+                tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model, bounds=[[0.001, 10**7]]*self.dimension, n_opt=10)
                 tmp_param = tck.corr_model_params
+
                 xt = origins + 0.5 * widths
-                # dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                # dydx1 = cent_diff(tck.interpolate, xt, self.step_size)
                 dydx1 = tck.jacobian(xt)
                 # dydx2 = cent_diff(self.func, xt, self.step_size)
+            elif self.meta == 'Kriging_Sklearn':
+                gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
+                gp.fit(samples, y)
+                xt = origins + 0.5 * widths
+                dydx1 = cent_diff(gp.predict, xt, self.step_size)
 
         initial_s = np.size(samplesU01, 0)
-        import time
-        tim = np.zeros([self.nSamples-initial_s, 1])
-        num = np.zeros([self.nSamples - initial_s, 1])
         for i in range(initial_s, self.nSamples):
-            print(i)
-            start_time = time.time()
             # Determine the stratum to break
             if self.option == 'Gradient':
                 # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
                 # All input variables are independent
                 var = (1/12)*widths**2
-                # print('variance', var)
-                # print('gradient', dydx)
                 # Estimate the variance over the stratum by Delta Method
                 s = np.zeros([i, 1])
                 for j in range(i):
                     s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j]**2))
                 bin2break = np.argmax(s)
-                # print(bin2break)
 
             elif self.option == 'Refined':
                 w = np.argwhere(weights == np.amax(weights))
@@ -746,22 +744,15 @@ class RSS:
                 # Cut the stratum in the direction of maximum gradient
                 cut_dir_temp = widths[bin2break, :]
                 t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
-                if len(t) != 1:
-                    dir2break = np.argmax(abs(dydx1[bin2break, t]))
-                else:
-                    dir2break = t
-            elif self.cut_type == 2:
-                # Cut stratum in direction of maximum gradient
-                dir2break = np.argmax(abs(dydx[bin2break, :]))
+                dir2break = t[np.argmax(abs(dydx1[bin2break, t]))]
 
             # Divide the stratum bin2break in the direction dir2break
-            # print('Bin to break =', bin2break, 'Direction to break =',  dir2break)
             widths[bin2break, dir2break] = widths[bin2break, dir2break] / 2
             widths = np.vstack([widths, widths[bin2break, :]])
 
             origins = np.vstack([origins, origins[bin2break, :]])
-            if samplesU01[bin2break, dir2break] < origins[i, dir2break] + widths[bin2break, dir2break]:
-                origins[i, dir2break] = origins[i, dir2break] + widths[bin2break, dir2break]
+            if samplesU01[bin2break, dir2break] < origins[-1, dir2break] + widths[bin2break, dir2break]:
+                origins[-1, dir2break] = origins[-1, dir2break] + widths[bin2break, dir2break]
             else:
                 origins[bin2break, dir2break] = origins[bin2break, dir2break] + widths[bin2break, dir2break]
 
@@ -784,25 +775,29 @@ class RSS:
 
                 if surr_update == 'global':
                     # Global surrogate updating: Update the surrogate model using all the points
+
                     if self.meta == 'Delaunay':
                         from scipy.interpolate import LinearNDInterpolator
                         tck = LinearNDInterpolator(samples, y)
                         xt = origins + 0.5 * widths
                         dydx = cent_diff(tck, xt, self.step_size)
-                    elif self.meta == 'Kriging':
-                        from UQpy.Surrogates import Krig
+                    elif self.meta == 'Kriging_UQpy':
                         tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model,
-                                   corr_model_params=tmp_param)
+                                   corr_model_params=tmp_param, bounds=[[0.001, 10**7]]*self.dimension, n_opt=10)
                         tmp_param = tck.corr_model_params
                         xt = origins + 0.5 * widths
-                        # dydx = cent_diff(tck.interpolate, xt, self.step_size)
+                        # dydx1 = cent_diff(tck.interpolate, xt, self.step_size)
                         dydx1 = tck.jacobian(xt)
+                    elif self.meta == 'Kriging_Sklearn':
+                        gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
+                        gp.fit(samples, y)
+                        xt = origins + 0.5 * widths
+                        dydx1 = cent_diff(gp.predict, xt, self.step_size)
                 else:
                     # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
                     # in a box surrounding the new sample points
 
                     # Define the points to be used for the surrogate training
-                    start_time12 = time.time()
                     max_dim = np.amax(widths)
                     ff = 2
                     ind_train = []
@@ -830,33 +825,27 @@ class RSS:
                             if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
                                 ind_update.append(k)
                         ff = ff + 1
-                    print(time.time() - start_time12)
 
                     # Update the surrogate model & the associated stored gradients
-                    dydx = np.vstack([dydx, np.zeros(self.dimension)])
+                    dydx1 = np.vstack([dydx1, np.zeros(self.dimension)])
+
                     if self.meta == 'Delaunay':
                         tck = LinearNDInterpolator(samples[ind_train, :], y[ind_train, :])
                         xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
                         dydx[ind_update, :] = cent_diff(tck, xt, self.step_size)
-                    elif self.meta == 'Kriging':
-                        from UQpy.Surrogates import Krig
+                    elif self.meta == 'Kriging_UQpy':
                         tck = Krig(samples=samples[ind_train, :], values=y[ind_train], reg_model='Quadratic',
-                                   corr_model=self.corr_model)
+                                   corr_model=self.corr_model, bounds=[[0.001, 10**7]]*self.dimension, n_opt=1)
                         xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
-                        # dydx[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
+                        # dydx1[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
                         dydx1[ind_update, :] = tck.jacobian(xt)
-            if self.option == 'Gradient':
+                    elif self.meta == 'Kriging_Sklearn':
+                        gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
+                        gp.fit(samples[ind_train, :], y[ind_train])
+                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
+                        dydx1[ind_update, :] = cent_diff(gp.predict, xt, self.step_size)
+            if self.option == 'Gradient' and self.meta == 'Kriging_UQpy':
                 self.corr_model_params = tck.corr_model_params
-            tim[i-initial_s] = time.time() - start_time
-            print(tim[i-initial_s])
-            num[i-initial_s] = i
-
-        import matplotlib.pyplot as plt
-        fi = plt.figure()
-        plt.xlabel("Number of points")
-        plt.ylabel("Time")
-        plt.plot(num, tim)
-        fi.savefig('Time200.png')
 
         print('Done!')
         return samples, samplesU01, origins, widths, weights

@@ -18,6 +18,7 @@
 """This module contains functionality for all the surrogate methods supported in UQpy."""
 
 import numpy as np
+import scipy.stats as stats
 from UQpy.Distributions import *
 from scipy.spatial.distance import pdist, cdist, squareform
 
@@ -302,46 +303,79 @@ class SROM:
 
 
 class Krig:
+    """
 
-    def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None):
+            Description:
+
+                Kriging surrogate creates an approximate model to predict the functional value at unknown locations.
+
+                References:
+                S.N. Lophaven , Hans Bruun Nielsen , J. Søndergaard, "DACE -- A MATLAB Kriging Toolbox",
+                    Informatics and Mathematical Modelling, Version 2.0, 2002.
+            Input:
+                :param samples: An array of samples corresponding to each random variables
+
+                :param values: An array of function evaluated at sample points
+                :type values: ndarray
+
+                :param reg_model: Regression model contains the basis function, which defines the trend of the model.
+                                  Options: Constant, Linear, Quadratic.
+                :type reg_model: string or function
+
+                :param corr_model: Correlation model contains the correlation function, which uses sample distance
+                                   to define similarity between samples.
+                                   Options: Exponential, Gaussian, Linear, Spherical, Cubic, Spline.
+                :type corr_model: string or function
+
+                :param corr_model_params: Initial values corresponding to hyperparameters/scale parameters.
+                :type corr_model_params: ndarray
+
+            Output:
+                :return: Krig.interpolate: This function predicts the function value and uncertainty associated with
+                                           it at unknown samples.
+                :rtype: Krig.interpolate: function
+
+                :return: Krig.jacobian: This function predicts the gradient of function and uncertainty associated with
+                                        it at unknown samples.
+                :rtype: Krig.jacobian: function
+
+        """
+
+    # Authors: Mohit Chauhan, Matthew Lombardo
+
+    def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None,
+                 n_opt=1):
 
         self.samples = samples
         self.values = values
         self.reg_model = reg_model
         self.corr_model = corr_model
         self.corr_model_params = corr_model_params
+        self.bounds = bounds
+        self.n_opt = n_opt
         self.init_krig()
         self.beta, self.gamma, self.sig, self.F_dash, self.C_inv, self.G = self.run_krig()
+        print(np.allclose(values, self.interpolate(samples), 1e-10))
 
     def run_krig(self):
         print('UQpy: Performing Krig...')
         S = self.samples
         Y = self.values
-        m = np.size(S, 0)
-        n = np.size(S, 1)
-        if np.size(Y) == m:
-            q = 1
-        else:
-            q = np.size(Y, 1)
+        # Number of samples and dimensions of samples and values
+        m, n = S.shape
+        q = int(np.size(Y)/m)
 
-        import time
-        # st = time.time()
         F, Jf = self.reg_model(S)
-        # print(time.time()-st)
 
-        # Update the initial values of hyperparameters to ensure PD covariance matrix
-        # st = time.time()
+        # Update the initial values of hyperparameters to ensure that covariance matrix is positive definite
         R = self.corr_model(x=S, s=S, params=self.corr_model_params)
-        # print(time.time() - st)
-        # st = time.time()
         while np.linalg.det(R) < 10**(-12):
             self.corr_model_params = 5*self.corr_model_params
             R = self.corr_model(x=S, s=S, params=self.corr_model_params)
-        # print(time.time() - st)
 
         from scipy import optimize
 
-        def loglikelihood(p0, S, q, m, n, F, Y):
+        def log_likelihood(p0, S, m, n, F, Y):
             R, dR = self.corr_model(x=S, s=S, params=p0, flag=1)
             try:
                 C = np.linalg.cholesky(R)
@@ -360,8 +394,8 @@ class Krig:
             alpha = np.matmul(R_inv, tmp)
             t4 = np.matmul(tmp.T, alpha)
 
-            L = (np.log(np.prod(np.diagonal(C))) + t4 + m * np.log(2 * np.pi)) / 2
-            # L = (np.log(np.prod(np.diagonal(C))) + m * np.log(2 * np.pi * sigma ** 2) + m) / 2
+            L = (np.log(np.prod(np.diagonal(C))) + m*np.log(np.sum(t4)/m) + m * np.log(2 * np.pi)) / 2
+            # L = (np.log(np.prod(np.diagonal(C))) + t4) / 2
 
             grad = np.zeros(n)
             for i in range(n):
@@ -376,13 +410,26 @@ class Krig:
                 t2 = 2*np.matmul(tmp.T, np.matmul(R_inv, np.matmul(fr, np.matmul(R_inv, np.matmul((np.matmul(fr, R_inv)-np.eye(m)), Y_dash)))))
                 t3 = np.matmul(tmp.T, np.matmul(R_inv, tmp))
                 t4 = np.matmul(tmp.T, np.matmul(R_bar, tmp))
-                grad[i] = 0.5*(t1 - (m/t3) * (t2 - t4))
+                grad[i] = 0.5*(t1 - (m/t3) * (t2 + t4))
 
             return L, grad
 
-        bounds_ = [[0, None]]*n
-        p_ = optimize.fmin_l_bfgs_b(loglikelihood, self.corr_model_params, args=(S, q, m, n, F, Y), bounds=bounds_)
+        p_ = optimize.fmin_l_bfgs_b(log_likelihood, self.corr_model_params, args=(S, m, n, F, Y), bounds=self.bounds)
         self.corr_model_params = p_[0]
+
+        # TODO: Decide if you want to keep this or not
+        # sp = self.corr_model_params
+        # p = np.zeros([self.n_opt, n])
+        # pf = np.zeros([self.n_opt, 1])
+        # for i in range(self.n_opt):
+        #     p_ = optimize.fmin_l_bfgs_b(log_likelihood, sp, args=(S, q, m, n, F, Y), bounds=self.bounds)
+        #     p[i, :] = p_[0]
+        #     pf[i, 0] = p_[1]
+        #     sp = stats.reciprocal.rvs([j[0] for j in self.bounds], [j[1] for j in self.bounds], 1)
+        # t = np.argmin(pf)
+        # print(pf, p)
+        # self.corr_model_params = p[t, :]
+        # print(t, p[t, :])
 
         R = self.corr_model(x=S, s=S, params=self.corr_model_params)
         C = np.linalg.cholesky(R)                   # Eq: 3.8, DACE
@@ -449,7 +496,10 @@ class Krig:
         # Defining Regression model (Linear)
         def regress(model=None):
             def r(s):
-                if model == 'Linear':
+                if model == 'Constant':
+                    fx = np.ones([np.size(s, 0), 1])
+                    jf = np.zeros([np.size(s, 0), 1])
+                elif model == 'Linear':
                     fx = np.concatenate((np.ones([np.size(s, 0), 1]), s), 1)
                     jf = np.concatenate((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1))), 1)
                     return fx, jf
@@ -485,15 +535,15 @@ class Krig:
         # Defining Correlation model (Gaussian Process)
         def corr(model):
             def c(x, s, params, flag=0):
-                rx = np.ones([np.size(s, 0), np.size(x, 0)])
+                rx1 = np.ones([np.size(s, 0), np.size(x, 0)])
                 drdt = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
                 drdx = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
-                if model == 'Other':
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - x[j, :]) ** 2)))
-                    return rx
-                elif model == 'Exponential':
+                # if model == 'Other':
+                #     for j in range(np.size(x, 0)):
+                #         for i in range(np.size(s, 0)):
+                #             rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - x[j, :]) ** 2)))
+                #     return rx
+                if model == 'Exponential':
                     # TODO: Get rid of loops
                     dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0), 1, 1))
                     rx = np.exp(np.sum(-params*abs(dis), axis=2)).T
@@ -506,40 +556,51 @@ class Krig:
                     #         for l in range(np.size(s, 1)):
                     #             drdt1[:, j, l] = -abs(x[j, l]-s[:, l])*rx1[:, j]
                     #             drdx1[:, j, l] = -params[l]*np.sign(x[j, l]-s[:, l])*rx1[:, j]
-                    if flag == 0:
-                        return rx
-                    elif flag == 1:
-                        return rx, drdt
-                    else:
-                        return rx, drdx
                 elif model == 'Gaussian':
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            rx[i, j] = rx[i, j] * np.exp(-sum(params * (x[j, :] - s[i, :])**2))
-                        for l in range(np.size(s, 1)):
-                            drdt[:, j, l] = -((x[j, l]-s[:, l])**2)*rx[:, j]
-                    if flag == 0:
-                        return rx
-                    else:
-                        return rx, drdt
+                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0), 1, 1))
+                    rx = np.exp(np.sum(-params * (dis**2), axis=2)).T
+                    drdt = -(dis**2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    drdx = -2*params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    # for j in range(np.size(x, 0)):
+                    #     for i in range(np.size(s, 0)):
+                    #         rx[i, j] = rx[i, j] * np.exp(-sum(params * (x[j, :] - s[i, :])**2))
+                    #     for l in range(np.size(s, 1)):
+                    #         drdt[:, j, l] = -((x[j, l]-s[:, l])**2)*rx[:, j]
                 elif model == 'Linear':
+                    tmp_x = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1))
+                    tmp_s = np.tile(s, (np.size(x, 0), 1, 1))
+                    dis = tmp_x - tmp_s
+                    # define array of zeros for max() comparison
+                    a = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
+                    rx = np.prod(np.maximum(a, (1 - params * abs(dis))), axis=2).T
+                    tmp_ = np.tile(tmp_x, (1, 1, np.size(x, 1)))
+                    tmp_[:, :, 0::(np.size(x, 1)+1)] = tmp_s
+                    t = tmp_ - np.tile(tmp_s, (1, 1, np.size(x, 1)))
+                    # print(rx, rx_)
+                    # print(np.array_equal(rx, rx_))
+                    ######
+                    drdt = -(np.tile(abs(dis), (np.size(x, 1), 1, 1))/tmp) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    # drdxg = -(2 * abs(dis) * params * np.sign(dis)) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+
                     for j in range(np.size(x, 0)):
                         for i in range(np.size(s, 0)):
                             for k in range(np.size(s, 1)):
-                                rx[i, j] = rx[i, j] * max(0, 1 - params[k] * abs(s[i, k] - s[j, k]))
-                    return rx
+                                rx1[i, j] = rx1[i, j] * max(0, 1 - params[k] * abs(s[i, k] - x[j, k]))
+
+                    print(np.array_equal(rx, rx1))
+
                 elif model == 'Spherical':
                     for j in range(np.size(x, 0)):
                         for i in range(np.size(s, 0)):
                             for k in range(np.size(s, 1)):
-                                zeta = min(1, params[k] * abs(s[i, k] - s[j, k]))
+                                zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
                                 rx[i, j] = rx[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
                     return rx
                 elif model == 'Cubic':
                     for j in range(np.size(x, 0)):
                         for i in range(np.size(s, 0)):
                             for k in range(np.size(s, 1)):
-                                zeta = min(1, params[k] * abs(s[i, k] - s[j, k]))
+                                zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
                                 rx[i, j] = rx[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
                     return rx
                 elif model == 'Spline':
@@ -554,6 +615,12 @@ class Krig:
                                 else:
                                     rx[i, j] = rx[i, j] * 0
                     return rx
+                if flag == 0:
+                    return rx
+                elif flag == 1:
+                    return rx, drdt
+                else:
+                    return rx, drdx
             return c
 
         if type(self.corr_model).__name__ == 'function':
@@ -563,191 +630,44 @@ class Krig:
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Correlation model.")
 
-        # def g(x, S, q, m, n, F, Y):
-        #     R, dR = self.corr_model(x=S, s=S, params=x, flag=1)
-        #     try:
-        #         C = np.linalg.cholesky(R)
-        #     except np.linalg.LinAlgError:
-        #         return np.zeros(n)
-        #
-        #     C_inv = np.linalg.inv(C)
-        #     R_inv = np.matmul(C_inv.T, C_inv)
-        #
-        #     F_dash = np.matmul(C_inv, F)
-        #     Y_dash = np.matmul(C_inv, Y)
-        #     Q, G = np.linalg.qr(F_dash)
-        #     beta = np.linalg.solve(G, np.matmul(np.transpose(Q), Y_dash))
-        #     tmp = Y_dash-np.matmul(F_dash, beta)
-        #     alpha = np.matmul(R_inv, tmp)
-        #
-        #     grad1 = np.zeros(n)
-        #     for i in range(n):
-        #         grad1[i] = 0.5*np.matrix.trace(np.matmul((np.matmul(alpha, alpha.T)- R_inv), dR[:, :, i]))
+# grad1 = np.zeros(n)
+#
+#             def func(p0, S, q, m, n, F, Y):
+#                 R, dR = self.corr_model(x=S, s=S, params=p0, flag=1)
+#                 try:
+#                     C = np.linalg.cholesky(R)
+#                 except np.linalg.LinAlgError:
+#                     return np.inf
+#
+#                 C_inv = np.linalg.inv(C)
+#                 R_inv = np.matmul(C_inv.T, C_inv)
+#
+#                 F_dash = np.matmul(C_inv, F)
+#                 Y_dash = np.matmul(C_inv, Y)
+#                 Q, G = np.linalg.qr(F_dash)
+#                 beta = np.linalg.solve(G, np.matmul(np.transpose(Q), Y_dash))
+#
+#                 tmp = Y_dash - np.matmul(F_dash, beta)
+#                 alpha = np.matmul(R_inv, tmp)
+#                 t4 = np.matmul(tmp.T, alpha)
+#
+#                 # L = (np.log(np.prod(np.diagonal(C))) + m * np.log(t4 / m) + m * np.log(2 * np.pi)) / 2
+#                 L = (np.log(np.prod(np.diagonal(C))) + t4) / 2
+#                 return L
+#
+#             h = 0.005
+#             for dir in range(n):
+#                 temp = np.zeros(n)
+#                 temp[dir] = 1
+#                 low = p0 - h / 2 * temp
+#                 hi = p0 + h / 2 * temp
+#                 f_hi = func(hi, S, q, m, n, F, Y)
+#                 f_low = func(low, S, q, m, n, F, Y)
+#                 if f_hi == np.inf or f_low == np.inf:
+#                     grad1[dir] = 0
+#                 else:
+#                     grad1[dir] = (f_hi-f_low)/h
+#
+#             # print(grad, grad1)
+#             # print(np.array_equal(grad, grad1))
 
-        # def func(p0, S, q, m, n, F, Y):
-        #     R = self.corr_model(x=S, s=S, params=p0)
-        #     try:
-        #         C = np.linalg.cholesky(R)
-        #     except np.linalg.LinAlgError:
-        #         return np.inf
-        #     F_dash = np.linalg.solve(C, F)
-        #     Y_dash = np.linalg.solve(C, Y)
-        #     Q, G = np.linalg.qr(F_dash)
-        #     beta = np.linalg.solve(G, np.matmul(np.transpose(Q), Y_dash))
-        #
-        #     sigma = np.zeros(q)
-        #     for l in range(q):
-        #         if q == 1:
-        #             sigma[l] = (1 / m) * (np.linalg.norm(Y_dash - np.matmul(F_dash, beta)) ** 2)
-        #         else:
-        #             sigma[l] = (1 / m) * (np.linalg.norm(Y_dash[:, l] - np.matmul(F_dash, beta[:, l])) ** 2)
-        #
-        #     L = (np.log(np.prod(np.diagonal(C))) + m * np.log(2 * np.pi * sigma ** 2) + m) / 2
-        #     return L
-
-        # grad = np.zeros(n)
-        # h = 0.005
-        # for dir in range(n):
-        #     temp = np.zeros(n)
-        #     temp[dir] = 1
-        #     low = x - h / 2 * temp
-        #     hi = x + h / 2 * temp
-        #     f_hi = func(hi, S, q, m, n, F, Y)
-        #     f_low = func(low, S, q, m, n, F, Y)
-        #     if f_hi == np.inf or f_low == np.inf:
-        #         grad[dir] = 0
-        #     else:
-        #         grad[dir] = (f_hi-f_low)/h
-        # print('grad', grad)
-        # print('grad1', grad1)
-        # return grad1
-
-
-
-
-
-
-        # def corr(s, model, params):
-        #     R = np.ones((np.size(s, 0), np.size(s, 0)))
-        #     dR = np.ones((np.size(params), np.size(s, 0), np.size(s, 0)))
-        #     for i in range(np.size(s, 0)):
-        #         for j in range(i, np.size(s, 0)):
-        #             if model == 'Other':
-        #                 R[i, j] = R[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - s[j, :])**2)))
-        #             for k in range(np.size(s, 1)):
-        #                 if model == 'Exponential':
-        #                     R[i, j] = R[i, j] * np.exp(-params[k] * abs(s[i, k] - s[j, k]))
-        #                     for l in range(np.size(params)):
-        #                         if i == j:
-        #                             dR[l, i, j] = dR[l, i, j]*(-abs(s[i, k] - s[j, k])*np.exp(-params[k] *
-        #                                                                                       abs(s[i, k] - s[j, k])))
-        #                         else:
-        #                             dR[l, i, j] = dR[l, i, j] * np.exp(-params[k] * abs(s[i, k] - s[j, k]))
-        #                 if model == 'Gaussian':
-        #                     R[i, j] = R[i, j] * np.exp(-params[k] * (s[i, k] - s[j, k])**2)
-        #                 if model == 'Linear':
-        #                     R[i, j] = R[i, j] * max(0, 1 - params[k]*abs(s[i, k] - s[j, k]))
-        #                 if model == 'Spherical':
-        #                     zeta = min(1, params[k]*abs(s[i, k] - s[j, k]))
-        #                     R[i, j] = R[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
-        #                 if model == 'Cubic':
-        #                     zeta = min(1, params[k]*abs(s[i, k] - s[j, k]))
-        #                     R[i, j] = R[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
-        #                 if model == 'Spline':
-        #                     zeta = params[k]*abs(s[i, k] - s[j, k])
-        #                     if zeta <= 0.2:
-        #                         R[i, j] = R[i, j] * (1 - 15*zeta**2 + 30*zeta**3)
-        #                     elif zeta <= 1:
-        #                         R[i, j] = R[i, j] * (1.25 * (1 - zeta)**3)
-        #                     else:
-        #                         R[i, j] = R[i, j] * 0
-        #             R[j, i] = R[i, j]
-        #             dR[:, j, i] = dR[:, i, j]
-        #     return R
-
-
-        # def intr(s, beta, gamma, reg_m, corr, theta, sig, G, F_dash, C_inv, var, R):
-        #     def interpolate(x):
-        #         fl = 0
-        #         if np.size(x) != np.size(x, 0)**2 and np.size(x, 0) == np.size(x.T, 0):
-        #             fl = 1
-        #         fx = reg_m(x, model=self.reg_model, flag=fl)
-        #         if fl == 1:
-        #             rx = np.ones(np.size(s, 0))
-        #             for i in range(np.size(s, 0)):
-        #                 if corr == 'Other':
-        #                     rx[i] = rx[i] * np.exp(-np.sqrt(np.sum(theta * (x - s[i, :]) ** 2)))
-        #                 for j in range(np.size(x, 0)):
-        #                     if corr == 'Exponential':
-        #                         rx[i] = rx[i] * np.exp(-theta[j] * abs((x[j] - s[i, j])))
-        #                     if corr == 'Gaussian':
-        #                         rx[i] = rx[i] * np.exp(-theta[j] * (x[j] - s[i, j])**2)
-        #                     if corr == 'Linear':
-        #                         rx[i] = rx[i] * max(0, 1 - theta[j] * abs(s[i, j] - x[j]))
-        #                     if corr == 'Spherical':
-        #                         zeta = min(1, theta[j] * abs(s[i, j] - x[j]))
-        #                         rx[i] = rx[i] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
-        #                     if corr == 'Cubic':
-        #                         zeta = min(1, theta[j] * abs(s[i, j] - x[j]))
-        #                         rx[i] = rx[i] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
-        #                     if corr == 'Spline':
-        #                         zeta = theta[j] * abs(s[i, j] - x[j])
-        #                         if zeta <= 0.2:
-        #                             rx[i] = rx[i] * (1 - 15 * zeta ** 2 + 30 * zeta ** 3)
-        #                         elif zeta <= 1:
-        #                             rx[i] = rx[i] * (1.25 * (1 - zeta) ** 3)
-        #                         else:
-        #                             rx[i] = rx[i] * 0
-        #             r_dash = np.matmul(C_inv, rx)
-        #             u = np.matmul(F_dash.T, r_dash) - fx
-        #             y = np.sum(fx * beta) + np.sum(rx * gamma)
-        #             mse = (sig**2)*(1+np.linalg.norm(np.linalg.solve(G, u))**2-np.linalg.norm(r_dash)**2)
-        #
-        #             if var == 'y':
-        #                 return y
-        #             elif var == 'mse':
-        #                 return mse
-        #         else:
-        #             rx = np.ones([np.size(s, 0), np.size(x, 0)])
-        #             # print(theta)
-        #             for j in range(np.size(x, 0)):
-        #                 for i in range(np.size(s, 0)):
-        #                     if corr == 'Other':
-        #                         rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(theta * (s[i, :] - x[j, :])**2)))
-        #                     for k in range(np.size(s, 1)):
-        #                         if corr == 'Exponential':
-        #                             rx[i, j] = rx[i, j] * np.exp(-theta[k] * abs(x[j, k] - s[i, k]))
-        #                         if corr == 'Gaussian':
-        #                             rx[i, j] = rx[i, j] * np.exp(-theta[k] * (s[i, k] - s[j, k]) ** 2)
-        #                         if corr == 'Linear':
-        #                             rx[i, j] = rx[i, j] * max(0, 1 - theta[k] * abs(s[i, k] - s[j, k]))
-        #                         if corr == 'Spherical':
-        #                             zeta = min(1, theta[k] * abs(s[i, k] - s[j, k]))
-        #                             rx[i, j] = rx[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
-        #                         if corr == 'Cubic':
-        #                             zeta = min(1, theta[k] * abs(s[i, k] - s[j, k]))
-        #                             rx[i, j] = rx[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
-        #                         if corr == 'Spline':
-        #                             zeta = theta[k] * abs(s[i, k] - x[j, k])
-        #                             if zeta <= 0.2:
-        #                                 rx[i, j] = rx[i, j] * (1 - 15 * zeta ** 2 + 30 * zeta ** 3)
-        #                             elif zeta <= 1:
-        #                                 rx[i, j] = rx[i, j] * (1.25 * (1 - zeta) ** 3)
-        #                             else:
-        #                                 rx[i, j] = rx[i, j] * 0
-        #             y = np.sum(fx * beta, 1) + np.sum(rx.T * gamma, 1)
-        #             mse = np.zeros(np.size(y))
-        #             for i in range(np.size(rx, 1)):
-        #                 r_dash = np.matmul(C_inv, rx[:, i])
-        #                 u = np.matmul(F_dash.T, r_dash) - fx.T[:, i]
-        #                 mse[i] = (sig ** 2) * (
-        #                         1 + np.linalg.norm(np.linalg.solve(G, u)) ** 2 - np.linalg.norm(r_dash) ** 2)
-        #             if var == 'y':
-        #                 return y
-        #             elif var == 'mse':
-        #                 return mse
-        #     return interpolate
-        #
-        # print('Done!')
-        # return intr(S, beta, gamma, regress, self.corr_model, self.corr_model_params, sigma, G, F_dash, C_inv, 'y', R),\
-        #        intr(S, beta, gamma, regress, self.corr_model, self.corr_model_params, sigma, G, F_dash, C_inv, 'mse', R)
