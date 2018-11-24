@@ -72,11 +72,12 @@ class RunModel2:
         # Input related
         self.input_template = input_template
         self.var_names = var_names
-        # Check if var_names is a list of strings
-        if self._is_list_of_strings(self.var_names):
-            self.n_vars = len(self.var_names)
-        else:
-            raise ValueError("Variable names should be passed as a list of strings.")
+        if self.var_names is not None:
+            # Check if var_names is a list of strings
+            if self._is_list_of_strings(self.var_names):
+                self.n_vars = len(self.var_names)
+            else:
+                raise ValueError("Variable names should be passed as a list of strings.")
 
         # Model related
         self.model_dir = model_dir

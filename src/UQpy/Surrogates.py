@@ -291,7 +291,7 @@ class SROM:
             if type(self.cdf_target[i]).__name__ == 'function':
                 self.cdf_target[i] = self.cdf_target[i]
             elif type(self.cdf_target[i]).__name__ == 'str':
-                self.cdf_target[i] = Distribution(self.cdf_target[i], self.cdf_target_params[i]).cdf
+                self.cdf_target[i] = Distribution(self.cdf_target[i]).cdf
             else:
                 raise NotImplementedError("Distribution type should be either 'function' or 'list'")
 
@@ -307,7 +307,7 @@ class Krig:
 
             Description:
 
-                Kriging surrogate creates an approximate model to predict the functional value at unknown locations.
+                Kriging surrogate creates an approximate model to predict the function value at unknown locations.
 
                 References:
                 S.N. Lophaven , Hans Bruun Nielsen , J. Søndergaard, "DACE -- A MATLAB Kriging Toolbox",
@@ -355,7 +355,7 @@ class Krig:
         self.n_opt = n_opt
         self.init_krig()
         self.beta, self.gamma, self.sig, self.F_dash, self.C_inv, self.G = self.run_krig()
-        print(np.allclose(values, self.interpolate(samples), 1e-10))
+        # print(np.allclose(values, self.interpolate(samples), 1e-10))
 
     def run_krig(self):
         print('UQpy: Performing Krig...')
@@ -410,14 +410,13 @@ class Krig:
                 t2 = 2*np.matmul(tmp.T, np.matmul(R_inv, np.matmul(fr, np.matmul(R_inv, np.matmul((np.matmul(fr, R_inv)-np.eye(m)), Y_dash)))))
                 t3 = np.matmul(tmp.T, np.matmul(R_inv, tmp))
                 t4 = np.matmul(tmp.T, np.matmul(R_bar, tmp))
-                grad[i] = 0.5*(t1 - (m/t3) * (t2 + t4))
+                grad[i] = 0.5*(t1 - (m/t3) * (t2 - t4))
 
             return L, grad
 
         p_ = optimize.fmin_l_bfgs_b(log_likelihood, self.corr_model_params, args=(S, m, n, F, Y), bounds=self.bounds)
         self.corr_model_params = p_[0]
 
-        # TODO: Decide if you want to keep this or not
         # sp = self.corr_model_params
         # p = np.zeros([self.n_opt, n])
         # pf = np.zeros([self.n_opt, 1])
@@ -464,13 +463,14 @@ class Krig:
             y = np.sum(fx * self.beta[:, 0], 1) + np.sum(rx.T * self.gamma[:, 0], 1)
         else:
             y = np.sum(fx * self.beta, 1) + np.sum(rx.T * self.gamma, 1)
-        mse = np.zeros(np.size(y))
-        # TODO: Get rid of loop
-        for i in range(np.size(rx, 1)):
-            r_dash = np.matmul(self.C_inv, rx[:, i])
-            u = np.matmul(self.F_dash.T, r_dash) - fx.T[:, i]
-            mse[i] = (self.sig ** 2) * (
-                    1 + np.linalg.norm(np.linalg.solve(self.G, u)) ** 2 - np.linalg.norm(r_dash) ** 2)
+        if dy:
+            mse = np.zeros(np.size(y))
+            # TODO: Get rid of loop
+            for i in range(np.size(rx, 1)):
+                r_dash = np.matmul(self.C_inv, rx[:, i])
+                u = np.matmul(self.F_dash.T, r_dash) - fx.T[:, i]
+                mse[i] = (self.sig ** 2) * (
+                        1 + np.linalg.norm(np.linalg.solve(self.G, u)) ** 2 - np.linalg.norm(r_dash) ** 2)
         if dy:
             return y, mse
         else:
@@ -486,147 +486,158 @@ class Krig:
             y_grad = np.sum(Jf * self.beta[None, :, None], 1) + np.sum(drdx.T * self.gamma[None, :, None], 1)
         return y_grad.T
 
+    # Defining Regression model (Linear)
+    def regress(self, model=None):
+        def r(s):
+            if model == 'Constant':
+                fx = np.ones([np.size(s, 0), 1])
+                jf = np.zeros([np.size(s, 0), 1])
+            elif model == 'Linear':
+                fx = np.concatenate((np.ones([np.size(s, 0), 1]), s), 1)
+                jf = np.concatenate((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1))), 1)
+                return fx, jf
+            elif model == 'Quadratic':
+                fx = np.zeros([np.size(s, 0), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2)])
+                jf = np.zeros(
+                    [np.size(s, 1), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2), np.size(s, 0)])
+                for i in range(np.size(s, 0)):
+                    temp = np.hstack((1, s[i, :]))
+                    for j in range(np.size(s, 1)):
+                        temp = np.hstack((temp, s[i, j] * s[i, j::]))
+                    fx[i, :] = temp
+                    # definie H matrix
+                    for j in range(np.size(s, 1)):
+                        tmp_ = s[i, j] * np.eye(np.size(s, 1))
+                        t1 = np.zeros([np.size(s, 1), np.size(s, 1)])
+                        t1[j, :] = s[i, :]
+                        tmp = tmp_ + t1
+                        if j == 0:
+                            H = tmp[:, j::]
+                        else:
+                            H = np.hstack((H, tmp[:, j::]))
+                    jf[:, :, i] = np.hstack((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1)), H))
+                return fx, jf
+
+        return r
+
+    # Defining Correlation model (Gaussian Process)
+    def corr(self, model):
+        def c(x, s, params, flag=0):
+            rx1 = np.ones([np.size(s, 0), np.size(x, 0)])
+            drdt = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
+            drdx = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
+            # if model == 'Other':
+            #     for j in range(np.size(x, 0)):
+            #         for i in range(np.size(s, 0)):
+            #             rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - x[j, :]) ** 2)))
+            #     return rx
+            if model == 'Exponential':
+                # TODO: Get rid of loops
+                dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                np.size(x, 0), 1, 1))
+                rx = np.exp(np.sum(-params * abs(dis), axis=2)).T
+                drdt = -abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                drdx = -params * np.sign(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                # for j in range(np.size(x, 0)):
+                #     for i in range(np.size(s, 0)):
+                #         rx1[i, j] = rx1[i, j] * np.exp(-sum(params * abs(x[j, :] - s[i, :])))
+                #     if flag != 0:
+                #         for l in range(np.size(s, 1)):
+                #             drdt1[:, j, l] = -abs(x[j, l]-s[:, l])*rx1[:, j]
+                #             drdx1[:, j, l] = -params[l]*np.sign(x[j, l]-s[:, l])*rx1[:, j]
+            elif model == 'Gaussian':
+                dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                np.size(x, 0), 1, 1))
+                rx = np.exp(np.sum(-params * (dis ** 2), axis=2)).T
+                drdt = -(dis ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                drdx = -2 * params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                # for j in range(np.size(x, 0)):
+                #     for i in range(np.size(s, 0)):
+                #         rx[i, j] = rx[i, j] * np.exp(-sum(params * (x[j, :] - s[i, :])**2))
+                #     for l in range(np.size(s, 1)):
+                #         drdt[:, j, l] = -((x[j, l]-s[:, l])**2)*rx[:, j]
+            elif model == 'Linear':
+                tmp_x = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1))
+                tmp_s = np.tile(s, (np.size(x, 0), 1, 1))
+                dis = tmp_x - tmp_s
+                # define array of zeros for max() comparison
+                a = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
+                rx = np.prod(np.maximum(a, (1 - params * abs(dis))), axis=2).T
+                tmp_ = np.tile(tmp_x, (1, 1, np.size(x, 1)))
+                tmp_[:, :, 0::(np.size(x, 1) + 1)] = tmp_s
+                t = tmp_ - np.tile(tmp_s, (1, 1, np.size(x, 1)))
+                # print(rx, rx_)
+                # print(np.array_equal(rx, rx_))
+                ######
+                drdt = -(np.tile(abs(dis), (np.size(x, 1), 1, 1)) / tmp) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                # drdxg = -(2 * abs(dis) * params * np.sign(dis)) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+
+                for j in range(np.size(x, 0)):
+                    for i in range(np.size(s, 0)):
+                        for k in range(np.size(s, 1)):
+                            rx1[i, j] = rx1[i, j] * max(0, 1 - params[k] * abs(s[i, k] - x[j, k]))
+
+                print(np.array_equal(rx, rx1))
+
+            # elif model == 'Spherical':
+            #     for j in range(np.size(x, 0)):
+            #         for i in range(np.size(s, 0)):
+            #             for k in range(np.size(s, 1)):
+            #                 zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
+            #                 rx[i, j] = rx[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
+            #     return rx
+            # elif model == 'Cubic':
+            #     for j in range(np.size(x, 0)):
+            #         for i in range(np.size(s, 0)):
+            #             for k in range(np.size(s, 1)):
+            #                 zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
+            #                 rx[i, j] = rx[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
+            #     return rx
+            # elif model == 'Spline':
+            #     for j in range(np.size(x, 0)):
+            #         for i in range(np.size(s, 0)):
+            #             for k in range(np.size(s, 1)):
+            #                 zeta = params[k] * abs(s[i, k] - x[j, k])
+            #                 if zeta <= 0.2:
+            #                     rx[i, j] = rx[i, j] * (1 - 15 * zeta ** 2 + 30 * zeta ** 3)
+            #                 elif zeta <= 1:
+            #                     rx[i, j] = rx[i, j] * (1.25 * (1 - zeta) ** 3)
+            #                 else:
+            #                     rx[i, j] = rx[i, j] * 0
+            #     return rx
+            if flag == 0:
+                return rx
+            elif flag == 1:
+                return rx, drdt
+            else:
+                return rx, drdx
+
+        return c
+
     def init_krig(self):
         if self.reg_model is None:
             raise NotImplementedError("Exit code: Regression model is not defined.")
 
+        if self.corr_model is None:
+            raise NotImplementedError("Exit code: Correlation model is not defined.")
+
         if self.corr_model_params is None:
             self.corr_model_params = np.ones(np.size(self.samples, 1))
 
-        # Defining Regression model (Linear)
-        def regress(model=None):
-            def r(s):
-                if model == 'Constant':
-                    fx = np.ones([np.size(s, 0), 1])
-                    jf = np.zeros([np.size(s, 0), 1])
-                elif model == 'Linear':
-                    fx = np.concatenate((np.ones([np.size(s, 0), 1]), s), 1)
-                    jf = np.concatenate((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1))), 1)
-                    return fx, jf
-                elif model == 'Quadratic':
-                    fx = np.zeros([np.size(s, 0), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2)])
-                    jf = np.zeros([np.size(s, 1), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2), np.size(s, 0)])
-                    for i in range(np.size(s, 0)):
-                        temp = np.hstack((1, s[i, :]))
-                        for j in range(np.size(s, 1)):
-                            temp = np.hstack((temp, s[i, j] * s[i, j::]))
-                        fx[i, :] = temp
-                        # definie H matrix
-                        for j in range(np.size(s, 1)):
-                            tmp_ = s[i, j]*np.eye(np.size(s, 1))
-                            t1 = np.zeros([np.size(s, 1), np.size(s, 1)])
-                            t1[j, :] = s[i, :]
-                            tmp = tmp_ + t1
-                            if j == 0:
-                                H = tmp[:, j::]
-                            else:
-                                H = np.hstack((H, tmp[:, j::]))
-                        jf[:, :, i] = np.hstack((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1)), H))
-                    return fx, jf
-            return r
+        if self.bounds is None:
+            self.bounds = [[0, None]]*self.samples.shape[1]
 
         if type(self.reg_model).__name__ == 'function':
             self.reg_model = self.reg_model
         elif self.reg_model in ['Linear', 'Quadratic']:
-            self.reg_model = regress(model=self.reg_model)
+            self.reg_model = self.regress(model=self.reg_model)
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Regression model.")
-
-        # Defining Correlation model (Gaussian Process)
-        def corr(model):
-            def c(x, s, params, flag=0):
-                rx1 = np.ones([np.size(s, 0), np.size(x, 0)])
-                drdt = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
-                drdx = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
-                # if model == 'Other':
-                #     for j in range(np.size(x, 0)):
-                #         for i in range(np.size(s, 0)):
-                #             rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - x[j, :]) ** 2)))
-                #     return rx
-                if model == 'Exponential':
-                    # TODO: Get rid of loops
-                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0), 1, 1))
-                    rx = np.exp(np.sum(-params*abs(dis), axis=2)).T
-                    drdt = -abs(dis)*np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = -params*np.sign(dis)*np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    # for j in range(np.size(x, 0)):
-                    #     for i in range(np.size(s, 0)):
-                    #         rx1[i, j] = rx1[i, j] * np.exp(-sum(params * abs(x[j, :] - s[i, :])))
-                    #     if flag != 0:
-                    #         for l in range(np.size(s, 1)):
-                    #             drdt1[:, j, l] = -abs(x[j, l]-s[:, l])*rx1[:, j]
-                    #             drdx1[:, j, l] = -params[l]*np.sign(x[j, l]-s[:, l])*rx1[:, j]
-                elif model == 'Gaussian':
-                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0), 1, 1))
-                    rx = np.exp(np.sum(-params * (dis**2), axis=2)).T
-                    drdt = -(dis**2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = -2*params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    # for j in range(np.size(x, 0)):
-                    #     for i in range(np.size(s, 0)):
-                    #         rx[i, j] = rx[i, j] * np.exp(-sum(params * (x[j, :] - s[i, :])**2))
-                    #     for l in range(np.size(s, 1)):
-                    #         drdt[:, j, l] = -((x[j, l]-s[:, l])**2)*rx[:, j]
-                elif model == 'Linear':
-                    tmp_x = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1))
-                    tmp_s = np.tile(s, (np.size(x, 0), 1, 1))
-                    dis = tmp_x - tmp_s
-                    # define array of zeros for max() comparison
-                    a = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
-                    rx = np.prod(np.maximum(a, (1 - params * abs(dis))), axis=2).T
-                    tmp_ = np.tile(tmp_x, (1, 1, np.size(x, 1)))
-                    tmp_[:, :, 0::(np.size(x, 1)+1)] = tmp_s
-                    t = tmp_ - np.tile(tmp_s, (1, 1, np.size(x, 1)))
-                    # print(rx, rx_)
-                    # print(np.array_equal(rx, rx_))
-                    ######
-                    drdt = -(np.tile(abs(dis), (np.size(x, 1), 1, 1))/tmp) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    # drdxg = -(2 * abs(dis) * params * np.sign(dis)) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            for k in range(np.size(s, 1)):
-                                rx1[i, j] = rx1[i, j] * max(0, 1 - params[k] * abs(s[i, k] - x[j, k]))
-
-                    print(np.array_equal(rx, rx1))
-
-                elif model == 'Spherical':
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            for k in range(np.size(s, 1)):
-                                zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
-                                rx[i, j] = rx[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
-                    return rx
-                elif model == 'Cubic':
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            for k in range(np.size(s, 1)):
-                                zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
-                                rx[i, j] = rx[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
-                    return rx
-                elif model == 'Spline':
-                    for j in range(np.size(x, 0)):
-                        for i in range(np.size(s, 0)):
-                            for k in range(np.size(s, 1)):
-                                zeta = params[k] * abs(s[i, k] - x[j, k])
-                                if zeta <= 0.2:
-                                    rx[i, j] = rx[i, j] * (1 - 15 * zeta ** 2 + 30 * zeta ** 3)
-                                elif zeta <= 1:
-                                    rx[i, j] = rx[i, j] * (1.25 * (1 - zeta) ** 3)
-                                else:
-                                    rx[i, j] = rx[i, j] * 0
-                    return rx
-                if flag == 0:
-                    return rx
-                elif flag == 1:
-                    return rx, drdt
-                else:
-                    return rx, drdx
-            return c
 
         if type(self.corr_model).__name__ == 'function':
             self.corr_model = self.corr_model
         elif self.corr_model in ['Other', 'Exponential', 'Gaussian', 'Linear', 'Spherical', 'Cubic', 'Spline']:
-            self.corr_model = corr(model=self.corr_model)
+            self.corr_model = self.corr(model=self.corr_model)
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Correlation model.")
 

@@ -28,6 +28,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from os import sys
 from inspect import signature
 from functools import partial
+from UQpy.RunModel2 import RunModel2
 
 
 ########################################################################################################################
@@ -75,7 +76,7 @@ class MCS:
 
     def __init__(self, dist_name=None, dist_params=None, dist_copula=None, nsamples=None):
 
-        if self.nsamples is None:
+        if nsamples is None:
             raise ValueError('UQpy error: nsamples must be defined.')
         # ne need to do other checks as they will be done within Distributions.py
         self.dist_name = dist_name
@@ -394,9 +395,9 @@ class STS:
 
         self.distribution = [None] * self.dimension
         for i in range(self.dimension):
-            self.distribution[i] = Distribution(self.dist_name[i], self.dist_params[i])
+            self.distribution[i] = Distribution(self.dist_name[i])
         self.samplesU01, self.samples = self.run_sts()
-        del self.dist_name, self.dist_params
+        del self.dist_name
 
     def run_sts(self):
         samples = np.empty([self.strata.origins.shape[0], self.strata.origins.shape[1]], dtype=np.float32)
@@ -605,14 +606,15 @@ class RSS:
     # Authors: Mohit S. Chauhan
     # Last modified: 11/11/2018 by Mohit S. Chauhan
 
-    def __init__(self, x=None, func=None, option='Refined', meta='Kriging_UQpy', strata='Rectangular', nSamples=None,
+    def __init__(self, x=None, model=None, func_name=None, option='Refined', meta='Kriging_UQpy', strata='Rectangular', nSamples=None,
                  cut_type=None, min_train_size=None, step_size=None, corr_model=None):
 
         _dict = {**x.__dict__}
         for k, v in _dict.items():
             setattr(self, k, v)
 
-        self.func = func
+        self.model = model
+        self.func_name = func_name
         self.option = option
         self.meta = meta
         self.starta = strata
@@ -646,8 +648,9 @@ class RSS:
         widths = self.strata.widths
         weights = self.strata.weights
         if self.option == 'Gradient':
-            y = self.func(samples)
-
+            # y = self.func(samples)
+            y = np.array(RunModel2(samples, model_script=self.model).qoi_list)
+            print(y)
             if self.meta == 'Delaunay':
                 print('hi')
                 # Fit the surrogate model
@@ -721,7 +724,7 @@ class RSS:
             samples = np.vstack([samples, new])
 
             if self.option == 'Gradient':
-                y = self.func(samples)
+                y = np.array(RunModel2(samples, model_script=self.model).qoi_list)
                 surr_update = 'global'
                 if np.size(samplesU01, 0) > self.min_train_size:
                     surr_update = 'local'
