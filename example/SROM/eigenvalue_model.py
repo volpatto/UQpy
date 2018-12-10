@@ -8,13 +8,13 @@ class RunPythonModel:
 
         self.samples = samples
         self.dimension = dimension
-        self.QOI = np.zeros_like(self.samples)
+        self.qoi = np.zeros_like(self.samples)
         for i in range(self.samples.shape[0]):
             p = np.array([[self.samples[i, 0]+self.samples[i, 1], -self.samples[i, 1], 0], 
                           [-self.samples[i, 1], self.samples[i, 1]+self.samples[i, 2], -self.samples[i, 2]], 
                           [0, -self.samples[i, 2], self.samples[i, 2]]])
             w, v = np.linalg.eig(p)
-            self.QOI[i, :] = w
+            self.qoi[i, :] = w
 
     # index = sys.argv[1]
     # filename = 'modelInput_{0}.txt'.format(int(index))

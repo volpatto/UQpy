@@ -397,7 +397,7 @@ class STS:
         for i in range(self.dimension):
             self.distribution[i] = Distribution(self.dist_name[i])
         self.samplesU01, self.samples = self.run_sts()
-        del self.dist_name, self.dist_params
+        del self.dist_name
 
     def run_sts(self):
         samples = np.empty([self.strata.origins.shape[0], self.strata.origins.shape[1]], dtype=np.float32)
@@ -603,221 +603,419 @@ class Strata:
 
 ########################################################################################################################
 ########################################################################################################################
-#                                         Class Markov Chain Monte Carlo
 #                                         Refined Stratified Sampling (RSS)
 ########################################################################################################################
+
+
 class RSS:
     """
+
+        Description:
+
+            Refined Stratified Sampling:
+            M. D. Shields, "Adaptive Monte Carlo analysis for strongly nonlinear stochastic systems",
+                Reliability Engineering & System Safety, ISSN: 0951-8320, Vol: 175, Page: 207-224, 2018.
+        Input:
+            :param x: A class object, it should be generated using STS or RSS class.
+            :type x: class
+
+            :param model: Python model which is used to evaluate the function value
+            :type model: str
+
+            :param meta: A string specifying the method used to estimate the gradient.
+                         Options: Delaunay, Kriging_UQpy and Kriging_Sklearn
+            :type meta: str
+
+            :param cell: A string specifying the stratification of sample domain.
+                         Options: Rectangular and Voronoi
+            :type cell: str
+
+            :param nsamples: Final size of the samples.
+            :type nsamples: int
+
+            :param min_train_size: An list or array containing weights associated with different samples.
+                                         Options:
+                                            If weights_distribution is None, then default value is assigned.
+                                            If size of weights_distribution is 1xd, then it is assigned as dot product
+                                                of weights_distribution and default value.
+                                            Otherwise size of weights_distribution should be equal to Nxd.
+                                         Default: weights_distribution = Nxd dimensional array with all elements equal
+                                         to 1.
+            :type min_train_size: int
+
+            :param step_size: Step size to calculate the gradient using central difference. Only required if Delaunay is
+                              used as surrogate approximation.
+            :type step_size: float
+
+            :param corr_model: Correlation model used to estimate gradient by defining kriging surrogate. Only required
+                               if Krig_UQpy is used as surrogate approximation.
+            :type corr_model: str
+
+            :param corr_model_params: Correlation model parameters used to estimate gradient by defining kriging
+                                      surrogate. If meta=Kriging_UQpy, it is an array defining initial estimate of
+                                      hyperparameters (optional). If meta=Kriging_Sklearn, it is correlation function.
+            :type corr_model_params: array or function
+
+        Output:
+            :return: RSS.samples: Final/expanded samples.
+            :rtype: RSS.samples: ndarray
+
+            :return: RSS.values: Function value evaluated at the expanded samples.
+            :rtype: RSS.values: ndarray
 
     """
 
     # Authors: Mohit S. Chauhan
-    # Last modified: 11/11/2018 by Mohit S. Chauhan
+    # Last modified: 12/03/2018 by Mohit S. Chauhan
 
-    def __init__(self, x=None, model=None, func_name=None, option='Refined', meta='Kriging_UQpy', strata='Rectangular', nSamples=None,
-                 cut_type=None, min_train_size=None, step_size=None, corr_model=None):
+    def __init__(self, x=None, model=None, meta='Kriging_UQpy', cell='Rectangular', nsamples=None,
+                 min_train_size=None, step_size=0.005, corr_model='Gaussian', corr_model_params=None):
 
-        _dict = {**x.__dict__}
-        for k, v in _dict.items():
-            setattr(self, k, v)
-
+        self.samples = x.samples
+        self.samplesU01 = x.samplesU01
+        self.distribution = x.distribution
+        self.dist_params = x.dist_params
+        self.strata = x.strata
         self.model = model
-        self.func_name = func_name
-        self.option = option
+        self.option = 'Refined'
         self.meta = meta
-        self.starta = strata
-        self.nSamples = nSamples
-        self.cut_type = cut_type
+        self.cell = cell
+        self.nsamples = nsamples
+        self.points = 0
         self.min_train_size = min_train_size
         self.step_size = step_size
         self.corr_model = corr_model
-        self.corr_model_params = 0
+        self.corr_model_params = corr_model_params
         self.init_rss()
-        self.samples, self.samplesU01, self.strata.origins, self.strata.widths, self.strata.weights = self.run_rss()
+        self.values = self.run_rss()
 
     def run_rss(self):
+        from UQpy.RunModel import RunModel
+        from UQpy.Surrogates import Krig
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from scipy.interpolate import LinearNDInterpolator
+        from scipy.spatial import Delaunay
+        import numpy.matlib as matlib
+        import itertools
+        import math
 
         print('UQpy: Performing RSS design...')
 
         def cent_diff(f, x, h):
             dydx = np.zeros((np.size(x, 0), np.size(x, 1)))
-            for dir in range(np.size(x, 1)):
+            for dirr in range(np.size(x, 1)):
                 temp = np.zeros((np.size(x, 0), np.size(x, 1)))
-                temp[:, dir] = np.ones(np.size(x, 0))
+                temp[:, dirr] = np.ones(np.size(x, 0))
                 low = x - h / 2 * temp
                 hi = x + h / 2 * temp
-                dydx[:, dir] = (f.__call__(hi) - f.__call__(low)) / h
+                dydx[:, dirr] = ((f.__call__(hi) - f.__call__(low)) / h)[:, 0]
 
             return dydx
 
-        samples = self.samples
-        samplesU01 = self.samplesU01
-        origins = self.strata.origins
-        widths = self.strata.widths
-        weights = self.strata.weights
-        if self.option == 'Gradient':
-            # y = self.func(samples)
-            y = np.array(RunModel2(samples, model_script=self.model).qoi_list)
-            print(y)
+        def gradient(x, y, corr_m_p, corr_m, xt):
             if self.meta == 'Delaunay':
-                print('hi')
-                # Fit the surrogate model
-                # from scipy.interpolate import LinearNDInterpolator
-                # tck = LinearNDInterpolator(samples, y)
-                # xt = origins + 0.5 * widths
-                # dydx = cent_diff(tck, xt, self.step_size)
+                # TODO: Check this case.
+                tck = LinearNDInterpolator(x, y, fill_value=0)
+                gr = cent_diff(tck, xt, self.step_size)
             elif self.meta == 'Kriging_UQpy':
-                tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model, bounds=[[0.001, 10**7]]*self.dimension, n_opt=10)
-                tmp_param = tck.corr_model_params
-
-                xt = origins + 0.5 * widths
-                # dydx1 = cent_diff(tck.interpolate, xt, self.step_size)
-                dydx1 = tck.jacobian(xt)
-                # dydx2 = cent_diff(self.func, xt, self.step_size)
+                with suppress_stdout():  # disable printing output comments
+                    tck = Krig(samples=x, values=y, reg_model='Quadratic', corr_model=corr_m,
+                               corr_model_params=corr_m_p, bounds=[[0.001, 10 ** 7]] * x.shape[1])
+                corr_m_p = tck.corr_model_params
+                gr = tck.jacobian(xt)
             elif self.meta == 'Kriging_Sklearn':
-                gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
-                gp.fit(samples, y)
-                xt = origins + 0.5 * widths
-                dydx1 = cent_diff(gp.predict, xt, self.step_size)
-
-        initial_s = np.size(samplesU01, 0)
-        for i in range(initial_s, self.nSamples):
-            # Determine the stratum to break
-            if self.option == 'Gradient':
-                # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
-                # All input variables are independent
-                var = (1/12)*widths**2
-                # Estimate the variance over the stratum by Delta Method
-                s = np.zeros([i, 1])
-                for j in range(i):
-                    s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j]**2))
-                bin2break = np.argmax(s)
-
-            elif self.option == 'Refined':
-                w = np.argwhere(weights == np.amax(weights))
-                bin2break = w[np.random.randint(len(w))]
-                self.cut_type = 0
-
-            # Determine the largest dimension of the stratum and define this as the cut direction
-            if self.cut_type == 0:
-                # Cut the stratum in a random direction
-                cut_dir_temp = widths[bin2break, :]
-                t = np.argwhere(cut_dir_temp[0] == np.amax(cut_dir_temp[0]))
-                dir2break = t[np.random.randint(len(t))]
-            elif self.cut_type == 1:
-                # Cut the stratum in the direction of maximum gradient
-                cut_dir_temp = widths[bin2break, :]
-                t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
-                dir2break = t[np.argmax(abs(dydx1[bin2break, t]))]
-
-            # Divide the stratum bin2break in the direction dir2break
-            widths[bin2break, dir2break] = widths[bin2break, dir2break] / 2
-            widths = np.vstack([widths, widths[bin2break, :]])
-
-            origins = np.vstack([origins, origins[bin2break, :]])
-            if samplesU01[bin2break, dir2break] < origins[-1, dir2break] + widths[bin2break, dir2break]:
-                origins[-1, dir2break] = origins[-1, dir2break] + widths[bin2break, dir2break]
+                gp = GaussianProcessRegressor(kernel=corr_m, n_restarts_optimizer=0)
+                gp.fit(x, y)
+                gr = cent_diff(gp.predict, xt, self.step_size)
+                # print(gr.shape)
             else:
-                origins[bin2break, dir2break] = origins[bin2break, dir2break] + widths[bin2break, dir2break]
+                raise NotImplementedError("Exit code: Does not identify 'meta'.")
+            return gr, corr_m_p
 
-            weights[bin2break] = weights[bin2break] / 2
-            weights = np.append(weights, weights[bin2break])
+        def local_points(pt, x, mts, dim, i_, max_dim):
+            # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
+            # in a box surrounding the new sample points
 
-            # Add a sample in the newly defined empty stratum
-            new = np.random.uniform(origins[i, :], origins[i, :] + widths[i, :])
-            samplesU01 = np.vstack([samplesU01, new])
-            for j in range(0, self.dimension):
-                icdf = self.distribution[j].icdf
-                new[j] = icdf(new[j], self.dist_params[j])
-            samples = np.vstack([samples, new])
+            # Define the points to be used for the surrogate training
+            ff = 0.2
+            ind_train = []
+            while np.size(ind_train) < mts:
+                x_ind = np.less_equal(
+                    matlib.repmat(np.maximum(pt - ff * max_dim, np.zeros([dim])), i_ + 1, 1), x) & np.greater_equal(
+                    matlib.repmat(np.maximum(pt + ff * max_dim, np.ones([dim])), i_ + 1, 1), x)
+                ind_train = []
+                for k_ in range(x_ind.shape[0]):
+                    if np.array_equal(x_ind[k_, :], np.ones(dim, dtype=bool)):
+                        ind_train.append(k_)
+                ff = ff + 0.1
+            return ind_train
+
+        def local_grad(pt, x, mts, dim, i_, max_dim):
+            # Define the points whose gradients will be updated
+            ff = 0.2
+            ind_update = []
+            while np.size(ind_update) < mts/2:
+                x_ind = np.less_equal(
+                    matlib.repmat(np.maximum(pt - ff * max_dim, np.zeros([dim])), i_ + 1, 1), x) & np.greater_equal(
+                    matlib.repmat(np.maximum(pt + ff * max_dim, np.ones([dim])), i_ + 1, 1), x)
+                ind_update = []
+                for k_ in range(i_):
+                    if np.array_equal(x_ind[k_, :], np.ones(dim, dtype=bool)):
+                        ind_update.append(k_)
+                ff = ff + 0.1
+            return ind_update
+
+        values = 0
+        dydx1 = 0
+        dimension = self.samples.shape[1]
+
+        if self.cell == 'Voronoi':
+            lst = np.array(list(itertools.product([0, 1], repeat=dimension)))
+            self.points = np.vstack([lst, self.samplesU01])
+            tri = Delaunay(self.points)
+        else:
+            if self.meta == 'Delaunay':
+                lst = np.array(list(itertools.product([0, 1], repeat=dimension)))
+                self.points = np.vstack([lst, self.samplesU01])
+            else:
+                self.points = self.samplesU01
+
+        if self.option == 'Gradient':
+            with suppress_stdout():  # disable printing output comments
+                values = np.array(RunModel(self.points, model_script=self.model).qoi_list)
+            if self.cell == 'Rectangular':
+                dydx1, self.corr_model_params = gradient(self.points, values, self.corr_model_params,
+                                                         self.corr_model, self.strata.origins+0.5*self.strata.widths)
+            else:
+                dydx1, self.corr_model_params = gradient(self.points, values, self.corr_model_params,
+                                                         self.corr_model, np.mean(tri.points[tri.simplices], 1))
+
+        initial_s = np.size(self.samplesU01, 0)
+        for i in range(initial_s, self.nsamples):
+
+            if self.cell == 'Rectangular':
+                # Determine the stratum to break
+                if self.option == 'Gradient':
+                    # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
+                    # All input variables are independent
+                    var = (1/12)*self.strata.widths**2
+                    # Estimate the variance over the stratum by Delta Method
+                    s = np.zeros([i, 1])
+                    for j in range(i):
+                        s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (self.strata.weights[j]**2))
+                    bin2break = np.argmax(s)
+                else:
+                    w = np.argwhere(self.strata.weights == np.amax(self.strata.weights))
+                    bin2break = w[np.random.randint(len(w))]
+
+                # Determine the largest dimension of the stratum and define this as the cut direction
+                if self.option == 'Refined':
+                    # Cut the stratum in a random direction
+                    cut_dir_temp = self.strata.widths[bin2break, :]
+                    t = np.argwhere(cut_dir_temp[0] == np.amax(cut_dir_temp[0]))
+                    dir2break = t[np.random.randint(len(t))]
+                else:
+                    # Cut the stratum in the direction of maximum gradient
+                    cut_dir_temp = self.strata.widths[bin2break, :]
+                    t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
+                    dir2break = t[np.argmax(abs(dydx1[bin2break, t]))]
+
+                # Divide the stratum bin2break in the direction dir2break
+                self.strata.widths[bin2break, dir2break] = self.strata.widths[bin2break, dir2break] / 2
+                self.strata.widths = np.vstack([self.strata.widths, self.strata.widths[bin2break, :]])
+
+                self.strata.origins = np.vstack([self.strata.origins, self.strata.origins[bin2break, :]])
+                if self.samplesU01[bin2break, dir2break] < self.strata.origins[-1, dir2break] + \
+                        self.strata.widths[bin2break, dir2break]:
+                    self.strata.origins[-1, dir2break] = self.strata.origins[-1, dir2break] + self.strata.widths[
+                        bin2break, dir2break]
+                else:
+                    self.strata.origins[bin2break, dir2break] = self.strata.origins[bin2break, dir2break] + \
+                                                                self.strata.widths[bin2break, dir2break]
+
+                self.strata.weights[bin2break] = self.strata.weights[bin2break] / 2
+                self.strata.weights = np.append(self.strata.weights, self.strata.weights[bin2break])
+
+                # Add a sample in the newly defined empty stratum
+                new = np.random.uniform(self.strata.origins[i, :], self.strata.origins[i, :] + self.strata.widths[i, :])
+                self.points = np.vstack([self.points, new])
+                self.samplesU01 = np.vstack([self.samplesU01, new])
+                for j in range(0, dimension):
+                    icdf = self.distribution[j].icdf
+                    new[j] = icdf(new[j], self.dist_params[j])
+                self.samples = np.vstack([self.samples, new])
+
+            elif self.cell == 'Voronoi':
+                # Estimate the variance over the stratum by Delta Method
+                weights = np.zeros(((np.size(tri.simplices, 0)), 1))
+                var = np.zeros((np.size(tri.simplices, 0), dimension))
+                s = np.zeros(((np.size(tri.simplices, 0)), 1))
+                for j in range((np.size(tri.simplices, 0))):
+                    # Define Simplex
+                    # print(tri.simplices[j, :])
+                    sim = self.points[tri.simplices[j, :]]
+                    # Estimate the volume of simplex
+                    v1 = np.concatenate((np.ones([np.size(sim, 0), 1]), sim), 1)
+                    weights[j] = (1 / math.factorial(np.size(tri.simplices[j, :]) - 1)) * np.linalg.det(v1)
+                    if self.option == 'Gradient':
+                        for k in range(dimension):
+                            # Estimate standard deviation of points
+                            from statistics import stdev
+                            # print(np.float(sim[:, k]), k)
+                            std = stdev(sim[:, k].tolist())
+                            var[j, k] = (weights[j] * math.factorial(dimension) / math.factorial(dimension + 2)) * (
+                                         dimension * std ** 2)
+                        s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j] ** 2))
+                if self.option == 'Refined':
+                    w = np.argwhere(weights[:, 0] == np.amax(weights[:, 0]))
+                    # print(weights[:, 0], w)
+                    bin2add = w[0, np.random.randint(len(w))]
+                else:
+                    bin2add = np.argmax(s)
+                tmp = self.points[tri.simplices[bin2add, :]]
+                col_one = np.array(list(itertools.combinations(np.arange(dimension+1), dimension)))
+                node = np.zeros_like(tmp)
+                for m in range(dimension+1):
+                    node[m, :] = np.sum(tmp[col_one[m]-1, :], 0)/dimension
+
+                new = Simplex(nodes=node, nsamples=1).samples
+                self.points = np.vstack([self.points, new])
+                self.samplesU01 = np.vstack([self.samplesU01, new])
+                for j in range(0, dimension):
+                    icdf = self.distribution[j].icdf
+                    new[0, j] = icdf(new[0, j], self.dist_params[j])
+                self.samples = np.vstack([self.samples, new])
+                tri = Delaunay(self.points)
+            else:
+                raise NotImplementedError("Exit code: Does not identify 'cell'.")
 
             if self.option == 'Gradient':
-                y = np.array(RunModel2(samples, model_script=self.model).qoi_list)
-                surr_update = 'global'
-                if np.size(samplesU01, 0) > self.min_train_size:
-                    surr_update = 'local'
+                with suppress_stdout():  # disable printing output comments
+                    y_new = RunModel(np.atleast_2d(self.samples[i, :]), model_script=self.model).qoi_list
+                values = np.vstack([values, y_new])
 
-                if surr_update == 'global':
+                if np.size(self.samples, 0) < self.min_train_size:
                     # Global surrogate updating: Update the surrogate model using all the points
-
-                    if self.meta == 'Delaunay':
-                        from scipy.interpolate import LinearNDInterpolator
-                        tck = LinearNDInterpolator(samples, y)
-                        xt = origins + 0.5 * widths
-                        dydx = cent_diff(tck, xt, self.step_size)
-                    elif self.meta == 'Kriging_UQpy':
-                        tck = Krig(samples=samples, values=y, reg_model='Quadratic', corr_model=self.corr_model,
-                                   corr_model_params=tmp_param, bounds=[[0.001, 10**7]]*self.dimension, n_opt=10)
-                        tmp_param = tck.corr_model_params
-                        xt = origins + 0.5 * widths
-                        # dydx1 = cent_diff(tck.interpolate, xt, self.step_size)
-                        dydx1 = tck.jacobian(xt)
-                    elif self.meta == 'Kriging_Sklearn':
-                        gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
-                        gp.fit(samples, y)
-                        xt = origins + 0.5 * widths
-                        dydx1 = cent_diff(gp.predict, xt, self.step_size)
+                    if self.cell == 'Rectangular':
+                        in_train = np.arange(self.points.shape[0])
+                        in_update = np.arange(i)
+                    else:
+                        in_train = np.arange(self.points.shape[0])
+                        in_update = np.arange(tri.simplices.shape[0])
                 else:
-                    # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
-                    # in a box surrounding the new sample points
+                    # Local surrogate updating: Update the surrogate model using min_train_size
+                    if self.cell == 'Rectangular':
+                        if self.meta == 'Delaunay':
+                            in_train = local_points(self.samplesU01[i, :], self.points, self.min_train_size,
+                                                    dimension, i+2**dimension, np.amax(self.strata.widths))
+                        else:
+                            in_train = local_points(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
+                                                    dimension, i, np.amax(self.strata.widths))
+                        in_update = local_grad(self.samplesU01[i, :], self.strata.origins + .5*self.strata.widths,
+                                               self.min_train_size, dimension, i, np.amax(self.strata.widths))
+                    else:
+                        # in_train: Indices of samples used to update surrogate approximation
+                        in_train = local_points(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
+                                                dimension, i, np.amax(np.sqrt(self.strata.weights)))
+                        # in_update: Indices of centroid of simplex, where gradient is updated
+                        in_update = local_grad(self.samplesU01[i, :], np.mean(tri.points[tri.simplices], 1),
+                                               self.min_train_size, dimension, tri.simplices.shape[0]-1,
+                                               np.amax(np.sqrt(self.strata.weights)))
 
-                    # Define the points to be used for the surrogate training
-                    max_dim = np.amax(widths)
-                    ff = 2
-                    ind_train = []
-                    while np.size(ind_train) < self.min_train_size:
-                        import numpy.matlib as matlib
-                        x_ind = np.less_equal(matlib.repmat(np.maximum(samplesU01[i, :]-ff*max_dim, np.zeros(
-                            [self.dimension])), i+1, 1), samplesU01) & np.greater_equal(matlib.repmat(np.maximum(
-                             samplesU01[i, :]+ff*max_dim, np.ones([self.dimension])), i+1, 1), samplesU01)
-                        ind_train = []
-                        for k in range(i):
-                            if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
-                                ind_train.append(k)
-                        ff = ff + 1
-
-                    # Define the points whose gradients will be updated
-                    ff = 2
-                    ind_update = []
-                    while np.size(ind_update) < self.min_train_size/2:
-                        import numpy.matlib as matlib
-                        x_ind = np.less_equal(matlib.repmat(np.maximum(samplesU01[i, :] - ff * max_dim, np.zeros(
-                            [self.dimension])), i + 1, 1), samplesU01) & np.greater_equal(matlib.repmat(np.maximum(
-                            samplesU01[i, :] + ff * max_dim, np.ones([self.dimension])), i + 1, 1), samplesU01)
-                        ind_update = []
-                        for k in range(i):
-                            if np.array_equal(x_ind[k, :], np.ones(self.dimension, dtype=bool)):
-                                ind_update.append(k)
-                        ff = ff + 1
-
-                    # Update the surrogate model & the associated stored gradients
-                    dydx1 = np.vstack([dydx1, np.zeros(self.dimension)])
-
-                    if self.meta == 'Delaunay':
-                        tck = LinearNDInterpolator(samples[ind_train, :], y[ind_train, :])
-                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
-                        dydx[ind_update, :] = cent_diff(tck, xt, self.step_size)
-                    elif self.meta == 'Kriging_UQpy':
-                        tck = Krig(samples=samples[ind_train, :], values=y[ind_train], reg_model='Quadratic',
-                                   corr_model=self.corr_model, bounds=[[0.001, 10**7]]*self.dimension, n_opt=1)
-                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
-                        # dydx1[ind_update, :] = cent_diff(tck.interpolate, xt, self.step_size)
-                        dydx1[ind_update, :] = tck.jacobian(xt)
-                    elif self.meta == 'Kriging_Sklearn':
-                        gp = GaussianProcessRegressor(kernel=self.corr_model, n_restarts_optimizer=0)
-                        gp.fit(samples[ind_train, :], y[ind_train])
-                        xt = origins[ind_update, :] + 0.5 * widths[ind_update, :]
-                        dydx1[ind_update, :] = cent_diff(gp.predict, xt, self.step_size)
-            if self.option == 'Gradient' and self.meta == 'Kriging_UQpy':
-                self.corr_model_params = tck.corr_model_params
-
+                # Update the surrogate model & the store the updated gradients
+                if self.cell == 'Rectangular':
+                    dydx1 = np.vstack([dydx1, np.zeros(dimension)])
+                    # print(in_update, self.strata.origins.shape)
+                    dydx1[in_update, :], self.corr_model_params = gradient(self.points[in_train, :],
+                                                                           values[in_train, :],
+                                                                           self.corr_model_params, self.corr_model,
+                                                                           self.strata.origins[in_update, :] +
+                                                                           .5*self.strata.widths[in_update, :])
+                else:
+                    dydx1 = np.vstack([dydx1, np.zeros([tri.simplices.shape[0]-dydx1.shape[0], dimension])])
+                    dydx1[in_update, :], self.corr_model_params = gradient(self.points[in_train, :],
+                                                                           values[in_train, :],
+                                                                           self.corr_model_params,
+                                                                           self.corr_model,
+                                                                           np.mean(tri.points[
+                                                                                       tri.simplices[in_update, :]],
+                                                                                   1))
         print('Done!')
-        return samples, samplesU01, origins, widths, weights
+        if self.option == 'Gradient':
+            if self.cell == 'Rectangular':
+                if self.meta != 'Delaunay':
+                    return values
+            else:
+                return values[2**dimension:, :]
 
     def init_rss(self):
-        if self.option not in ['Refined', 'Gradient']:
-            raise NotImplementedError("Exit code: Does not identify 'option'.")
+        if self.model is not None:
+            self.option = 'Gradient'
 
+
+########################################################################################################################
+########################################################################################################################
+#                                        Generating random samples inside a Simplex
+########################################################################################################################
+class Simplex:
+    """
+        Description:
+
+            Generate random samples inside a simplex using uniform probability distribution.
+
+            References:
+            W. N. Edelinga, R. P. Dwightb, P. Cinnellaa, "Simplex-stochastic collocation method with improved
+                calability",Journal of Computational Physics, 310:301–328 2016.
+        Input:
+            :param nodes: The vertices of the simplex
+            :type nodes: ndarray
+
+            :param nsamples: The number of samples to be generated inside the simplex
+            :type nsamples: int
+        Output:
+            :return samples: New generated samples
+            :rtype samples: ndarray
+    """
+
+    # Authors: Dimitris G.Giovanis
+    # Last modified: 11/28/2018 by Mohit S. Chauhan
+
+    def __init__(self, nodes=None, nsamples=1):
+        self.nodes = np.atleast_2d(nodes)
+        self.nsamples = nsamples
+        self.init_sis()
+        self.samples = self.run_sis()
+
+    def run_sis(self):
+        dimension = self.nodes.shape[1]
+        if dimension > 1:
+            sample = np.zeros([self.nsamples, dimension])
+            for i in range(self.nsamples):
+                r = np.zeros([dimension])
+                ad = np.zeros(shape=(dimension, len(self.nodes)))
+                for j in range(dimension):
+                    b_ = list()
+                    for k in range(1, len(self.nodes)):
+                        ai = self.nodes[k, j] - self.nodes[k - 1, j]
+                        b_.append(ai)
+                    ad[j] = np.hstack((self.nodes[0, j], b_))
+                    r[j] = np.random.uniform(0.0, 1.0, 1) ** (1 / (dimension - j))
+                d = np.cumprod(r)
+                r_ = np.hstack((1, d))
+                sample[i, :] = np.dot(ad, r_)
+        else:
+            a = min(self.nodes)
+            b = max(self.nodes)
+            sample = a + (b - a) * np.random.rand(dimension, self.nsamples).reshape(self.nsamples, dimension)
+        return sample
+
+    def init_sis(self):
+        if self.nsamples <= 0 or type(self.nsamples).__name__ != 'int':
+            raise NotImplementedError("Exit code: Number of samples to be generated 'nsamples' should be a positive "
+                                      "integer.")
+
+        if self.nodes.shape[0] != self.nodes.shape[1] + 1:
+            raise NotImplementedError("Size of simplex (nodes) is not consistent.")
 
 
 ########################################################################################################################
