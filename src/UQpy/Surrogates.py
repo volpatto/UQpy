@@ -345,7 +345,7 @@ class Krig:
     # Last modified: 12/03/2018 by Mohit S. Chauhan
 
     def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None,
-                 n_opt=1, op='Yes'):
+                 n_opt=1):
 
         self.samples = samples
         self.values = values
@@ -355,7 +355,6 @@ class Krig:
         self.bounds = bounds
         self.n_opt = n_opt
         self.init_krig()
-        self.op = op
         self.beta, self.gamma, self.sig, self.F_dash, self.C_inv, self.G = self.run_krig()
         # print(np.allclose(values, self.interpolate(samples), 1e-10))
 
@@ -378,7 +377,7 @@ class Krig:
         from scipy import optimize
 
         def log_likelihood(p0, s, m, n, f, y):
-            r__, dr_ = self.corr_model(x=s, s=s, params=p0, flag=1)
+            r__, dr_ = self.corr_model(x=s, s=s, params=p0, dt=True)
             try:
                 cc = np.linalg.cholesky(r__)
             except np.linalg.LinAlgError:
@@ -398,8 +397,6 @@ class Krig:
             tmp = y_das - np.matmul(f_das, bt)
             alpha = np.matmul(r_in, tmp)
             t4 = np.matmul(tmp.T, alpha)
-            # print(np.prod(np.diagonal(cc)))
-            # print(np.sum(t4)/m)
 
             ll = (np.log(np.prod(np.diagonal(cc))) + m*np.log(np.sum(t4)/m) + m * np.log(2 * np.pi)) / 2
             # ll = (np.log(np.prod(np.diagonal(cc))) + t4) / 2
@@ -408,7 +405,7 @@ class Krig:
             for i in range(n):
                 # grad[i] = 0.5 * np.matrix.trace(np.matmul((np.matmul(alpha, alpha.T) - r_in), dr_[:, :, i]))
                 # TODO: Find efficient ways to estimate gradient
-                t1 = np.matrix.trace(np.matmul(r_in, dr_[:, :, i]))
+                t1 = np.trace(np.matmul(r_in, dr_[:, :, i]))
                 r_bar = np.matmul(r_in, np.matmul(dr_[:, :, i], r_in))
                 f__ = np.linalg.cholesky(np.matmul(f.T, np.matmul(r_in, f)))
                 f_in = np.linalg.inv(f__)
@@ -482,177 +479,11 @@ class Krig:
 
     def jacobian(self, x):
         fx, jf = self.reg_model(x)
-        rx, drdx = self.corr_model(x=x, s=self.samples, params=self.corr_model_params, flag=2)
+        rx, drdx = self.corr_model(x=x, s=self.samples, params=self.corr_model_params, dx=True)
         y_grad = np.einsum('ijk,jm->ik', jf, self.beta) + np.einsum('ijk,jm->ki', drdx.T, self.gamma)
         # TODO: Add uncertainty in gradient
 
         return y_grad
-
-    # Defining Regression model (Linear)
-    def regress(self, model=None):
-        def r(s):
-            s = np.atleast_2d(s)
-            if model == 'Constant':
-                fx = np.ones([np.size(s, 0), 1])
-                jf = np.zeros([np.size(s, 0), 1])
-            if model == 'Linear':
-                fx = np.concatenate((np.ones([np.size(s, 0), 1]), s), 1)
-                jf = np.concatenate((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1))), 1)
-                return fx, jf
-            if model == 'Quadratic':
-                fx = np.zeros([np.size(s, 0), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2)])
-                jf = np.zeros(
-                    [np.size(s, 1), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2), np.size(s, 0)])
-                for i in range(np.size(s, 0)):
-                    temp = np.hstack((1, s[i, :]))
-                    for j in range(np.size(s, 1)):
-                        temp = np.hstack((temp, s[i, j] * s[i, j::]))
-                    fx[i, :] = temp
-                    # definie H matrix
-                    for j in range(np.size(s, 1)):
-                        tmp_ = s[i, j] * np.eye(np.size(s, 1))
-                        t1 = np.zeros([np.size(s, 1), np.size(s, 1)])
-                        t1[j, :] = s[i, :]
-                        tmp = tmp_ + t1
-                        if j == 0:
-                            h_ = tmp[:, j::]
-                        else:
-                            h_ = np.hstack((h_, tmp[:, j::]))
-                    jf[:, :, i] = np.hstack((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1)), h_))
-                return fx, jf.T
-
-        return r
-
-    # Defining Correlation model (Gaussian Process)
-    def corr(self, model):
-        def c(x, s, params, flag=0):
-            rx, drdt, drdx = 0, 0, 0
-            x = np.atleast_2d(x)
-            if model == 'Exponential':
-                dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                np.size(x, 0), 1, 1))
-                rx = np.exp(np.sum(-params * abs(dis), axis=2)).T
-                drdt = -abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                drdx = -params * np.sign(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-            elif model == 'Gaussian':
-                dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                np.size(x, 0), 1, 1))
-                rx = np.exp(np.sum(-params * (dis ** 2), axis=2)).T
-                drdt = -(dis ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                drdx = -2 * params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-            elif model == 'Linear':
-                # Create stack matrix, where each block is x_i with all s
-                stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0),
-                                                                                                          1, 1))
-                # Taking stack and turning each d value into 1-theta*dij
-                after_parameters = 1 - params * abs(stack)
-                # Define matrix of zeros to compare against (not necessary to be defined separately,
-                # but the line is bulky if this isn't defined first, and it is used more than once)
-                comp_zero = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
-                # Compute matrix of max{0,1-theta*d}
-                max_matrix = np.maximum(after_parameters, comp_zero)
-                rx = np.prod(max_matrix, 2).T
-                # Create matrix that has 1s where max_matrix is nonzero
-                # -Essentially, this acts as a way to store the indices of where the values are nonzero
-                ones_and_zeros = max_matrix.astype(bool).astype(int)
-                # Set initial derivatives as if all were positive
-                first_dtheta = -abs(stack)
-                first_dx = np.negative(params) * np.sign(stack)
-                # Multiply derivs by ones_and_zeros...this will set the values where the
-                # derivative should be zero to zero, and keep all other values the same
-                drdt = np.multiply(first_dtheta, ones_and_zeros)
-                drdx = np.multiply(first_dx, ones_and_zeros)
-                # Loop over parameters, shifting max_matrix and multiplying over derivative
-                # matrix with each iteration
-                for i in range(len(params) - 1):
-                    drdt = drdt * np.roll(max_matrix, i + 1, axis=2)
-                    drdx = drdx * np.roll(max_matrix, i + 1, axis=2)
-                # Multiplying matrices by ones_and_zeros multiplication sets 0 values equal to
-                # -0.0, so this comparison sets all -0.0 to 0.0 (Python should treat these the
-                # same, but it looks better with 0.0)
-                drdt[drdt == -0.0] = 0
-                drdx[drdx == -0.0] = 0
-            elif model == 'Spherical':
-                # Create stack matrix, where each block is x_i with all s
-                stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0),
-                                                                                                          1, 1))
-                # Taking stack and creating array of all thetaj*dij
-                after_parameters = params * abs(stack)
-                # Create matrix of all ones to compare
-                comp_ones = np.ones((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
-                # zeta_matrix has all values min{1,theta*dij}
-                zeta_matrix = np.minimum(after_parameters, comp_ones)
-                # Copy zeta_matrix to another matrix that will used to find where derivative should be zero
-                indices = zeta_matrix
-                # If value of min{1,theta*dij} is 1, the derivative should be 0.
-                # So, replace all values of 1 with 0, then perform the .astype(bool).astype(int)
-                # operation like in the linear example, so you end up with an array of 1's where
-                # the derivative should be caluclated and 0 where it should be zero
-                indices[indices == 1] = 0
-                # Create matrix of all |dij| (where non zero) to be used in calculation of dR/dtheta
-                dtheta_derivs = indices.astype(bool).astype(int) * abs(stack)
-                # Same as above, but for matrix of all thetaj where non-zero
-                dx_derivs = indices.astype(bool).astype(int) * params
-                # Initial matrices containing derivates for all values in array. Note since
-                # dtheta_s and dx_s already accounted for where derivative should be zero, all
-                # that must be done is multiplying the |dij| or thetaj matrix on top of a
-                # matrix of derivates w.r.t zeta (in this case, dzeta = -1.5+1.5zeta**2)
-                drdt = (-1.5 + 1.5 * zeta_matrix ** 2) * dtheta_derivs
-                drdx = (-1.5 + 1.5 * zeta_matrix ** 2) * dx_derivs
-                # Also, create matrix for values of equation, 1 - 1.5zeta + 0.5zeta**3, for loop
-                zeta_function = 1 - 1.5 * zeta_matrix + 0.5 * zeta_matrix ** 3
-                rx = np.prod(zeta_function, 2).T
-                # Same as previous example, loop over zeta matrix by shifting index
-                for i in range(len(params) - 1):
-                    drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
-                    drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
-                # Replace -0.0 with 0.0
-                drdt[drdt == -0.0] = 0.0
-                drdx[drdx == -0.0] = 0.0
-            elif model == 'Cubic':
-                # Create stack matrix, where each block is x_i with all s
-                stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (np.size(x, 0),
-                                                                                                          1, 1))
-                # Taking stack and creating array of all thetaj*dij
-                after_parameters = params * abs(stack)
-                # Create matrix of all ones to compare
-                comp_ones = np.ones((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
-                # zeta_matrix has all values min{1,theta*dij}
-                zeta_matrix = np.minimum(after_parameters, comp_ones)
-                # Copy zeta_matrix to another matrix that will used to find where derivative should be zero
-                indices = zeta_matrix
-                # If value of min{1,theta*dij} is 1, the derivative should be 0.
-                # So, replace all values of 1 with 0, then perform the .astype(bool).astype(int)
-                # operation like in the linear example, so you end up with an array of 1's where
-                # the derivative should be caluclated and 0 where it should be zero
-                indices[indices == 1] = 0
-                # Create matrix of all |dij| (where non zero) to be used in calculation of dR/dtheta
-                dtheta_derivs = indices.astype(bool).astype(int) * abs(stack)
-                # Same as above, but for matrix of all thetaj where non-zero
-                dx_derivs = indices.astype(bool).astype(int) * params
-                # Initial matrices containing derivates for all values in array. Note since
-                # dtheta_s and dx_s already accounted for where derivative should be zero, all
-                # that must be done is multiplying the |dij| or thetaj matrix on top of a
-                # matrix of derivates w.r.t zeta (in this case, dzeta = -6zeta+6zeta**2)
-                drdt = (-6 * zeta_matrix + 6 * zeta_matrix**2) * dtheta_derivs
-                drdx = (-6 * zeta_matrix + 6 * zeta_matrix**2) * dx_derivs
-                # Also, create matrix for values of equation, 1 - 1.5zeta + 0.5zeta**3, for loop
-                zeta_function = 1 - 3 * zeta_matrix**2 + 2 * zeta_matrix**3
-                rx = np.prod(zeta_function, 2).T
-                # Same as previous example, loop over zeta matrix by shifting index
-                for i in range(len(params) - 1):
-                    drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
-                    drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
-                # Replace -0.0 with 0.0
-                drdt[drdt == -0.0] = 0.0
-                drdx[drdx == -0.0] = 0.0
-            if flag == 0:
-                return rx
-            elif flag == 1:
-                return rx, drdt
-            else:
-                return rx, drdx
-        return c
 
     def init_krig(self):
         if self.reg_model is None:
@@ -667,140 +498,235 @@ class Krig:
         if self.bounds is None:
             self.bounds = [[0.001, 10**7]]*self.samples.shape[1]
 
+        # Defining Regression model (Linear)
+        def regress(model=None):
+            def r(s):
+                s = np.atleast_2d(s)
+                if model == 'Constant':
+                    fx = np.ones([np.size(s, 0), 1])
+                    jf = np.zeros([np.size(s, 0), 1])
+                    return fx, jf
+                if model == 'Linear':
+                    fx = np.concatenate((np.ones([np.size(s, 0), 1]), s), 1)
+                    jf = np.concatenate((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1))), 1)
+                    return fx, jf
+                if model == 'Quadratic':
+                    fx = np.zeros([np.size(s, 0), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2)])
+                    jf = np.zeros(
+                        [np.size(s, 1), int((np.size(s, 1) + 1) * (np.size(s, 1) + 2) / 2), np.size(s, 0)])
+                    for i in range(np.size(s, 0)):
+                        temp = np.hstack((1, s[i, :]))
+                        for j in range(np.size(s, 1)):
+                            temp = np.hstack((temp, s[i, j] * s[i, j::]))
+                        fx[i, :] = temp
+                        # definie H matrix
+                        h_ = 0
+                        for j in range(np.size(s, 1)):
+                            tmp_ = s[i, j] * np.eye(np.size(s, 1))
+                            t1 = np.zeros([np.size(s, 1), np.size(s, 1)])
+                            t1[j, :] = s[i, :]
+                            tmp = tmp_ + t1
+                            if j == 0:
+                                h_ = tmp[:, j::]
+                            else:
+                                h_ = np.hstack((h_, tmp[:, j::]))
+                        jf[:, :, i] = np.hstack((np.zeros([np.size(s, 1), 1]), np.eye(np.size(s, 1)), h_))
+                    return fx, jf.T
+
+            return r
+
         if type(self.reg_model).__name__ == 'function':
             self.reg_model = self.reg_model
         elif self.reg_model in ['Linear', 'Quadratic']:
-            self.reg_model = self.regress(model=self.reg_model)
+            self.reg_model = regress(model=self.reg_model)
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Regression model.")
 
+        # Defining Correlation model (Gaussian Process)
+        def corr(model):
+            def c(x, s, params, dt=False, dx=False):
+                rx, drdt, drdx = 0, 0, 0
+                x = np.atleast_2d(x)
+                if model == 'Exponential':
+                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    rx = np.exp(np.sum(-params * abs(dis), axis=2)).T
+                    drdt = -abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    drdx = -params * np.sign(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                elif model == 'Gaussian':
+                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    rx = np.exp(np.sum(-params * (dis ** 2), axis=2)).T
+                    drdt = -(dis ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    drdx = -2 * params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                elif model == 'Linear':
+                    # Create stack matrix, where each block is x_i with all s
+                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    # Taking stack and turning each d value into 1-theta*dij
+                    after_parameters = 1 - params * abs(stack)
+                    # Define matrix of zeros to compare against (not necessary to be defined separately,
+                    # but the line is bulky if this isn't defined first, and it is used more than once)
+                    comp_zero = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
+                    # Compute matrix of max{0,1-theta*d}
+                    max_matrix = np.maximum(after_parameters, comp_zero)
+                    rx = np.prod(max_matrix, 2).T
+                    # Create matrix that has 1s where max_matrix is nonzero
+                    # -Essentially, this acts as a way to store the indices of where the values are nonzero
+                    ones_and_zeros = max_matrix.astype(bool).astype(int)
+                    # Set initial derivatives as if all were positive
+                    first_dtheta = -abs(stack)
+                    first_dx = np.negative(params) * np.sign(stack)
+                    # Multiply derivs by ones_and_zeros...this will set the values where the
+                    # derivative should be zero to zero, and keep all other values the same
+                    drdt = np.multiply(first_dtheta, ones_and_zeros)
+                    drdx = np.multiply(first_dx, ones_and_zeros)
+                    # Loop over parameters, shifting max_matrix and multiplying over derivative
+                    # matrix with each iteration
+                    for i in range(len(params) - 1):
+                        drdt = drdt * np.roll(max_matrix, i + 1, axis=2)
+                        drdx = drdx * np.roll(max_matrix, i + 1, axis=2)
+                    # Multiplying matrices by ones_and_zeros multiplication sets 0 values equal to
+                    # -0.0, so this comparison sets all -0.0 to 0.0 (Python should treat these the
+                    # same, but it looks better with 0.0)
+                    drdt[drdt == -0.0] = 0
+                    drdx[drdx == -0.0] = 0
+                elif model == 'Spherical':
+                    # Create stack matrix, where each block is x_i with all s
+                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    # Taking stack and creating array of all thetaj*dij
+                    after_parameters = params * abs(stack)
+                    # Create matrix of all ones to compare
+                    comp_ones = np.ones((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
+                    # zeta_matrix has all values min{1,theta*dij}
+                    zeta_matrix = np.minimum(after_parameters, comp_ones)
+                    # Copy zeta_matrix to another matrix that will used to find where derivative should be zero
+                    indices = zeta_matrix
+                    # If value of min{1,theta*dij} is 1, the derivative should be 0.
+                    # So, replace all values of 1 with 0, then perform the .astype(bool).astype(int)
+                    # operation like in the linear example, so you end up with an array of 1's where
+                    # the derivative should be caluclated and 0 where it should be zero
+                    indices[indices == 1] = 0
+                    # Create matrix of all |dij| (where non zero) to be used in calculation of dR/dtheta
+                    dtheta_derivs = indices.astype(bool).astype(int) * abs(stack)
+                    # Same as above, but for matrix of all thetaj where non-zero
+                    dx_derivs = indices.astype(bool).astype(int) * params * np.sign(stack)
+                    # Initial matrices containing derivates for all values in array. Note since
+                    # dtheta_s and dx_s already accounted for where derivative should be zero, all
+                    # that must be done is multiplying the |dij| or thetaj matrix on top of a
+                    # matrix of derivates w.r.t zeta (in this case, dzeta = -1.5+1.5zeta**2)
+                    drdt = (-1.5 + 1.5 * zeta_matrix ** 2) * dtheta_derivs
+                    drdx = (-1.5 + 1.5 * zeta_matrix ** 2) * dx_derivs
+                    # Also, create matrix for values of equation, 1 - 1.5zeta + 0.5zeta**3, for loop
+                    zeta_function = 1 - 1.5 * zeta_matrix + 0.5 * zeta_matrix ** 3
+                    rx = np.prod(zeta_function, 2).T
+                    # Same as previous example, loop over zeta matrix by shifting index
+                    for i in range(len(params) - 1):
+                        drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
+                        drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
+                    # Replace -0.0 with 0.0
+                    drdt[drdt == -0.0] = 0.0
+                    drdx[drdx == -0.0] = 0.0
+                elif model == 'Cubic':
+                    # Create stack matrix, where each block is x_i with all s
+                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    # Taking stack and creating array of all thetaj*dij
+                    after_parameters = params * abs(stack)
+                    # Create matrix of all ones to compare
+                    comp_ones = np.ones((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
+                    # zeta_matrix has all values min{1,theta*dij}
+                    zeta_matrix = np.minimum(after_parameters, comp_ones)
+                    # Copy zeta_matrix to another matrix that will used to find where derivative should be zero
+                    indices = zeta_matrix
+                    # If value of min{1,theta*dij} is 1, the derivative should be 0.
+                    # So, replace all values of 1 with 0, then perform the .astype(bool).astype(int)
+                    # operation like in the linear example, so you end up with an array of 1's where
+                    # the derivative should be caluclated and 0 where it should be zero
+                    indices[indices == 1] = 0
+                    # Create matrix of all |dij| (where non zero) to be used in calculation of dR/dtheta
+                    dtheta_derivs = indices.astype(bool).astype(int) * abs(stack)
+                    # Same as above, but for matrix of all thetaj where non-zero
+                    dx_derivs = indices.astype(bool).astype(int) * params * np.sign(stack)
+                    # Initial matrices containing derivates for all values in array. Note since
+                    # dtheta_s and dx_s already accounted for where derivative should be zero, all
+                    # that must be done is multiplying the |dij| or thetaj matrix on top of a
+                    # matrix of derivates w.r.t zeta (in this case, dzeta = -6zeta+6zeta**2)
+                    drdt = (-6 * zeta_matrix + 6 * zeta_matrix ** 2) * dtheta_derivs
+                    drdx = (-6 * zeta_matrix + 6 * zeta_matrix ** 2) * dx_derivs
+                    # Also, create matrix for values of equation, 1 - 1.5zeta + 0.5zeta**3, for loop
+                    zeta_function = 1 - 3 * zeta_matrix ** 2 + 2 * zeta_matrix ** 3
+                    rx = np.prod(zeta_function, 2).T
+                    # Same as previous example, loop over zeta matrix by shifting index
+                    for i in range(len(params) - 1):
+                        drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
+                        drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
+                    # Replace -0.0 with 0.0
+                    drdt[drdt == -0.0] = 0.0
+                    drdx[drdx == -0.0] = 0.0
+                elif model == 'Spline':
+                    # Create stack matrix, where each block is x_i with all s
+                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                        np.size(x, 0),
+                        1, 1))
+                    # In this case, the zeta value is just abs(stack)*parameters, no comparison
+                    zeta_matrix = abs(stack) * params
+                    # So, dtheta and dx are just |dj| and theta*sgn(dj), respectively
+                    dtheta_derivs = abs(stack)
+                    # dx_derivs = np.ones((np.size(x,0),np.size(s,0),np.size(s,1)))*parameters
+                    dx_derivs = np.sign(stack) * params
+
+                    # Initialize empty sigma and dsigma matrices
+                    sigma = np.ones((zeta_matrix.shape[0], zeta_matrix.shape[1], zeta_matrix.shape[2]))
+                    dsigma = np.ones((zeta_matrix.shape[0], zeta_matrix.shape[1], zeta_matrix.shape[2]))
+
+                    # Loop over cases to create zeta_matrix and subsequent dR matrices
+                    for i in range(zeta_matrix.shape[0]):
+                        for j in range(zeta_matrix.shape[1]):
+                            for k in range(zeta_matrix.shape[2]):
+                                y = zeta_matrix[i, j, k]
+                                if 0 <= y <= 0.2:
+                                    sigma[i, j, k] = 1 - 15 * y ** 2 + 30 * y ** 3
+                                    dsigma[i, j, k] = -30 * y + 90 * y ** 2
+                                elif 0.2 < y < 1.0:
+                                    sigma[i, j, k] = 1.25 * (1 - y) ** 3
+                                    dsigma[i, j, k] = 3.75 * (1 - y) ** 2 * -1
+                                elif y >= 1:
+                                    sigma[i, j, k] = 0
+                                    dsigma[i, j, k] = 0
+
+                    # Initialize derivative matrices incorporating chain rule
+                    drdt = dsigma * dtheta_derivs
+                    drdx = dsigma * dx_derivs
+
+                    # Loop over to create proper matrices
+                    for i in range(len(params) - 1):
+                        drdt = drdt * np.roll(sigma, i + 1, axis=2)
+                        drdx = drdx * np.roll(sigma, i + 1, axis=2)
+
+                    # Replace -0.0 with 0.0
+                    drdt[drdt == -0.0] = 0.0
+                    drdx[drdx == -0.0] = 0.0
+
+                if dt:
+                    return rx, drdt
+                if dx:
+                    return rx, drdx
+                return rx
+            return c
+
         if type(self.corr_model).__name__ == 'function':
             self.corr_model = self.corr_model
-        elif self.corr_model in ['Other', 'Exponential', 'Gaussian', 'Linear', 'Spherical', 'Cubic', 'Spline']:
-            self.corr_model = self.corr(model=self.corr_model)
+        elif self.corr_model in ['Exponential', 'Gaussian', 'Linear', 'Spherical', 'Cubic', 'Spline']:
+            self.corr_model = corr(model=self.corr_model)
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Correlation model.")
-
-
-
-            # x = np.atleast_2d(x)
-            # rx1 = np.ones([np.size(s, 0), np.size(x, 0)])
-            # drdt = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
-            # drdx = np.zeros([np.size(s, 0), np.size(x, 0), np.size(s, 1)])
-
-            # if model == 'Other':
-            #     for j in range(np.size(x, 0)):
-            #         for i in range(np.size(s, 0)):
-            #             rx[i, j] = rx[i, j] * np.exp(-np.sqrt(np.sum(params * (s[i, :] - x[j, :]) ** 2)))
-            #     return rx
-# elif model == 'Linear':
-            #     tmp_x = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1))
-            #     tmp_s = np.tile(s, (np.size(x, 0), 1, 1))
-            #     dis = tmp_x - tmp_s
-            #     # define array of zeros for max() comparison
-            #     a = np.zeros((np.size(x, 0), np.size(s, 0), np.size(s, 1)))
-            #     rx = np.prod(np.maximum(a, (1 - params * abs(dis))), axis=2).T
-            #     tmp_ = np.tile(tmp_x, (1, 1, np.size(x, 1)))
-            #     tmp_[:, :, 0::(np.size(x, 1) + 1)] = tmp_s
-            #     t = tmp_ - np.tile(tmp_s, (1, 1, np.size(x, 1)))
-            #     # print(rx, rx_)
-            #     # print(np.array_equal(rx, rx_))
-            #     ######
-            #     drdt = -(np.tile(abs(dis), (np.size(x, 1), 1, 1)) / tmp) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-            #     # drdxg = -(2 * abs(dis) * params * np.sign(dis)) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-            #
-            #     for j in range(np.size(x, 0)):
-            #         for i in range(np.size(s, 0)):
-            #             for k in range(np.size(s, 1)):
-            #                 rx1[i, j] = rx1[i, j] * max(0, 1 - params[k] * abs(s[i, k] - x[j, k]))
-            #
-            #     print(np.array_equal(rx, rx1))
-
-            # elif model == 'Spherical':
-            #     for j in range(np.size(x, 0)):
-            #         for i in range(np.size(s, 0)):
-            #             for k in range(np.size(s, 1)):
-            #                 zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
-            #                 rx[i, j] = rx[i, j] * (1 - 1.5 * zeta + 0.5 * zeta ** 3)
-            #     return rx
-            # elif model == 'Cubic':
-            #     for j in range(np.size(x, 0)):
-            #         for i in range(np.size(s, 0)):
-            #             for k in range(np.size(s, 1)):
-            #                 zeta = min(1, params[k] * abs(s[i, k] - x[j, k]))
-            #                 rx[i, j] = rx[i, j] * (1 - 3 * zeta ** 2 + 2 * zeta ** 3)
-            #     return rx
-            # elif model == 'Spline':
-            #     for j in range(np.size(x, 0)):
-            #         for i in range(np.size(s, 0)):
-            #             for k in range(np.size(s, 1)):
-            #                 zeta = params[k] * abs(s[i, k] - x[j, k])
-            #                 if zeta <= 0.2:
-            #                     rx[i, j] = rx[i, j] * (1 - 15 * zeta ** 2 + 30 * zeta ** 3)
-            #                 elif zeta <= 1:
-            #                     rx[i, j] = rx[i, j] * (1.25 * (1 - zeta) ** 3)
-            #                 else:
-            #                     rx[i, j] = rx[i, j] * 0
-            #     return rx
-
-
-# grad1 = np.zeros(n)
-#
-#             def func(p0, S, q, m, n, F, Y):
-#                 R, dR = self.corr_model(x=S, s=S, params=p0, flag=1)
-#                 try:
-#                     C = np.linalg.cholesky(R)
-#                 except np.linalg.LinAlgError:
-#                     return np.inf
-#
-#                 C_inv = np.linalg.inv(C)
-#                 R_inv = np.matmul(C_inv.T, C_inv)
-#
-#                 F_dash = np.matmul(C_inv, F)
-#                 Y_dash = np.matmul(C_inv, Y)
-#                 Q, G = np.linalg.qr(F_dash)
-#                 beta = np.linalg.solve(G, np.matmul(np.transpose(Q), Y_dash))
-#
-#                 tmp = Y_dash - np.matmul(F_dash, beta)
-#                 alpha = np.matmul(R_inv, tmp)
-#                 t4 = np.matmul(tmp.T, alpha)
-#
-#                 # L = (np.log(np.prod(np.diagonal(C))) + m * np.log(t4 / m) + m * np.log(2 * np.pi)) / 2
-#                 L = (np.log(np.prod(np.diagonal(C))) + t4) / 2
-#                 return L
-#
-#             h = 0.005
-#             for dir in range(n):
-#                 temp = np.zeros(n)
-#                 temp[dir] = 1
-#                 low = p0 - h / 2 * temp
-#                 hi = p0 + h / 2 * temp
-#                 f_hi = func(hi, S, q, m, n, F, Y)
-#                 f_low = func(low, S, q, m, n, F, Y)
-#                 if f_hi == np.inf or f_low == np.inf:
-#                     grad1[dir] = 0
-#                 else:
-#                     grad1[dir] = (f_hi-f_low)/h
-#
-#             # print(grad, grad1)
-#             # print(np.array_equal(grad, grad1))
-
-
-            # y = np.matmul(fx, self.beta) + np.matmul(rx.T, self.gamma)
-
-            # mse = np.zeros(np.size(y))
-            # for i in range(np.size(rx, 1)):
-            #     r_dash = np.matmul(self.C_inv, rx[:, i])
-            #     u = np.matmul(self.F_dash.T, r_dash) - fx.T[:, i]
-            #     mse[i] = (self.sig ** 2) * (
-            #             1 + np.linalg.norm(np.linalg.solve(self.G, u)) ** 2 - np.linalg.norm(r_dash) ** 2)
-            # print(mse, mse1)
-
-            # y_grad = np.sum(Jf.T * self.beta[None, :], 1).T + np.sum(drdx.T * self.gamma[:, 0], 1).T
-            # if np.size(x, 0) == 1:
-            #     print('here')
-            #     y_grad = np.sum(Jf * self.beta[:, 0], 1) + np.sum(drdx.T * self.gamma[:, 0], 1)
-            # else:
 
     # if q == 1:
     #     print('hi')

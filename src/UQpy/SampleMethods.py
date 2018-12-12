@@ -612,7 +612,14 @@ class RSS:
 
         Description:
 
-            Refined Stratified Sampling:
+            Generate new samples using adaptive sampling methods, i.e. Refined Stratified Sampling and Gradient
+            Enhanced Refined Stratified Sampling.
+
+            References:
+            Michael D. Shields, Kirubel Teferra, Adam Hapij and Raymond P. Daddazio, "Refined Stratified Sampling for
+                efficient Monte Carlo based uncertainty quantification", Reliability Engineering & System Safety,
+                ISSN: 0951-8320, Vol: 142, Page: 310-325, 2015.
+
             M. D. Shields, "Adaptive Monte Carlo analysis for strongly nonlinear stochastic systems",
                 Reliability Engineering & System Safety, ISSN: 0951-8320, Vol: 175, Page: 207-224, 2018.
         Input:
@@ -668,7 +675,7 @@ class RSS:
     # Authors: Mohit S. Chauhan
     # Last modified: 12/03/2018 by Mohit S. Chauhan
 
-    def __init__(self, x=None, model=None, meta='Kriging_UQpy', cell='Rectangular', nsamples=None,
+    def __init__(self, x=None, model=None, meta='Delaunay', cell='Rectangular', nsamples=None,
                  min_train_size=None, step_size=0.005, corr_model='Gaussian', corr_model_params=None):
 
         self.samples = x.samples
@@ -745,8 +752,7 @@ class RSS:
                 ff = ff + 0.1
             return train
 
-        values = 0
-        dydx1 = 0
+        values, dydx1, tri = 0, 0, 0
         dimension = self.samples.shape[1]
 
         if self.cell == 'Voronoi':
