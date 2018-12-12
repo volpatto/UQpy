@@ -709,7 +709,6 @@ class RSS:
                 low = x - h / 2 * temp
                 hi = x + h / 2 * temp
                 dydx[:, dirr] = ((f.__call__(hi) - f.__call__(low)) / h)[:, 0]
-
             return dydx
 
         def gradient(x, y, corr_m_p, corr_m, xt):
@@ -727,43 +726,24 @@ class RSS:
                 gp = GaussianProcessRegressor(kernel=corr_m, n_restarts_optimizer=0)
                 gp.fit(x, y)
                 gr = cent_diff(gp.predict, xt, self.step_size)
-                # print(gr.shape)
             else:
                 raise NotImplementedError("Exit code: Does not identify 'meta'.")
             return gr, corr_m_p
 
-        def local_points(pt, x, mts, dim, i_, max_dim):
-            # Local surrogate updating: Update the surrogate model using a minimum of'min_train_size' samples
-            # in a box surrounding the new sample points
-
-            # Define the points to be used for the surrogate training
+        def local(pt, x, mts, max_dim):
+            # Identify the indices of 'mts' number of points in array 'x', which are closest to point 'pt'.
             ff = 0.2
-            ind_train = []
-            while np.size(ind_train) < mts:
-                x_ind = np.less_equal(
-                    matlib.repmat(np.maximum(pt - ff * max_dim, np.zeros([dim])), i_ + 1, 1), x) & np.greater_equal(
-                    matlib.repmat(np.maximum(pt + ff * max_dim, np.ones([dim])), i_ + 1, 1), x)
-                ind_train = []
-                for k_ in range(x_ind.shape[0]):
-                    if np.array_equal(x_ind[k_, :], np.ones(dim, dtype=bool)):
-                        ind_train.append(k_)
+            train = []
+            while len(train) < mts:
+                a = x > matlib.repmat(pt - ff * max_dim, x.shape[0], 1)
+                b = x < matlib.repmat(pt + ff * max_dim, x.shape[0], 1)
+                x_ind = a & b
+                train = []
+                for k_ in range(x.shape[0]):
+                    if np.array_equal(x_ind[k_, :], np.ones(x.shape[1])):
+                        train.append(k_)
                 ff = ff + 0.1
-            return ind_train
-
-        def local_grad(pt, x, mts, dim, i_, max_dim):
-            # Define the points whose gradients will be updated
-            ff = 0.2
-            ind_update = []
-            while np.size(ind_update) < mts/2:
-                x_ind = np.less_equal(
-                    matlib.repmat(np.maximum(pt - ff * max_dim, np.zeros([dim])), i_ + 1, 1), x) & np.greater_equal(
-                    matlib.repmat(np.maximum(pt + ff * max_dim, np.ones([dim])), i_ + 1, 1), x)
-                ind_update = []
-                for k_ in range(i_):
-                    if np.array_equal(x_ind[k_, :], np.ones(dim, dtype=bool)):
-                        ind_update.append(k_)
-                ff = ff + 0.1
-            return ind_update
+            return train
 
         values = 0
         dydx1 = 0
@@ -836,8 +816,9 @@ class RSS:
                 self.strata.weights[bin2break] = self.strata.weights[bin2break] / 2
                 self.strata.weights = np.append(self.strata.weights, self.strata.weights[bin2break])
 
-                # Add a sample in the newly defined empty stratum
+                # Add an uniform random sample inside new stratum
                 new = np.random.uniform(self.strata.origins[i, :], self.strata.origins[i, :] + self.strata.widths[i, :])
+                # Adding new sample to points, samplesU01 and samples attributes
                 self.points = np.vstack([self.points, new])
                 self.samplesU01 = np.vstack([self.samplesU01, new])
                 for j in range(0, dimension):
@@ -852,7 +833,6 @@ class RSS:
                 s = np.zeros(((np.size(tri.simplices, 0)), 1))
                 for j in range((np.size(tri.simplices, 0))):
                     # Define Simplex
-                    # print(tri.simplices[j, :])
                     sim = self.points[tri.simplices[j, :]]
                     # Estimate the volume of simplex
                     v1 = np.concatenate((np.ones([np.size(sim, 0), 1]), sim), 1)
@@ -861,30 +841,32 @@ class RSS:
                         for k in range(dimension):
                             # Estimate standard deviation of points
                             from statistics import stdev
-                            # print(np.float(sim[:, k]), k)
                             std = stdev(sim[:, k].tolist())
                             var[j, k] = (weights[j] * math.factorial(dimension) / math.factorial(dimension + 2)) * (
                                          dimension * std ** 2)
                         s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j] ** 2))
                 if self.option == 'Refined':
                     w = np.argwhere(weights[:, 0] == np.amax(weights[:, 0]))
-                    # print(weights[:, 0], w)
                     bin2add = w[0, np.random.randint(len(w))]
                 else:
                     bin2add = np.argmax(s)
+                # Creating sub-simplex, node is an array containing mid-point of edges
                 tmp = self.points[tri.simplices[bin2add, :]]
                 col_one = np.array(list(itertools.combinations(np.arange(dimension+1), dimension)))
                 node = np.zeros_like(tmp)
                 for m in range(dimension+1):
                     node[m, :] = np.sum(tmp[col_one[m]-1, :], 0)/dimension
 
+                # Using Simplex class to generate new sample
                 new = Simplex(nodes=node, nsamples=1).samples
+                # Adding new sample to points, samplesU01 and samples attributes
                 self.points = np.vstack([self.points, new])
                 self.samplesU01 = np.vstack([self.samplesU01, new])
                 for j in range(0, dimension):
                     icdf = self.distribution[j].icdf
                     new[0, j] = icdf(new[0, j], self.dist_params[j])
                 self.samples = np.vstack([self.samples, new])
+                # Creating Delaunay triangulation from the new points
                 tri = Delaunay(self.points)
             else:
                 raise NotImplementedError("Exit code: Does not identify 'cell'.")
@@ -906,26 +888,24 @@ class RSS:
                     # Local surrogate updating: Update the surrogate model using min_train_size
                     if self.cell == 'Rectangular':
                         if self.meta == 'Delaunay':
-                            in_train = local_points(self.samplesU01[i, :], self.points, self.min_train_size,
-                                                    dimension, i+2**dimension, np.amax(self.strata.widths))
+                            in_train = local(self.samplesU01[i, :], self.points, self.min_train_size,
+                                             np.amax(self.strata.widths))
                         else:
-                            in_train = local_points(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
-                                                    dimension, i, np.amax(self.strata.widths))
-                        in_update = local_grad(self.samplesU01[i, :], self.strata.origins + .5*self.strata.widths,
-                                               self.min_train_size, dimension, i, np.amax(self.strata.widths))
+                            in_train = local(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
+                                             np.amax(self.strata.widths))
+                        in_update = local(self.samplesU01[i, :], self.strata.origins + .5*self.strata.widths,
+                                          self.min_train_size/2, np.amax(self.strata.widths))
                     else:
                         # in_train: Indices of samples used to update surrogate approximation
-                        in_train = local_points(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
-                                                dimension, i, np.amax(np.sqrt(self.strata.weights)))
+                        in_train = local(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
+                                         np.amax(np.sqrt(self.strata.weights)))
                         # in_update: Indices of centroid of simplex, where gradient is updated
-                        in_update = local_grad(self.samplesU01[i, :], np.mean(tri.points[tri.simplices], 1),
-                                               self.min_train_size, dimension, tri.simplices.shape[0]-1,
-                                               np.amax(np.sqrt(self.strata.weights)))
+                        in_update = local(self.samplesU01[i, :], np.mean(tri.points[tri.simplices], 1),
+                                          self.min_train_size/2, np.amax(np.sqrt(self.strata.weights)))
 
                 # Update the surrogate model & the store the updated gradients
                 if self.cell == 'Rectangular':
                     dydx1 = np.vstack([dydx1, np.zeros(dimension)])
-                    # print(in_update, self.strata.origins.shape)
                     dydx1[in_update, :], self.corr_model_params = gradient(self.points[in_train, :],
                                                                            values[in_train, :],
                                                                            self.corr_model_params, self.corr_model,
@@ -951,6 +931,8 @@ class RSS:
     def init_rss(self):
         if self.model is not None:
             self.option = 'Gradient'
+        if self.min_train_size is None:
+            self.min_train_size = self.nsamples
 
 
 ########################################################################################################################

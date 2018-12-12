@@ -357,7 +357,7 @@ class Krig:
         self.init_krig()
         self.op = op
         self.beta, self.gamma, self.sig, self.F_dash, self.C_inv, self.G = self.run_krig()
-        print(np.allclose(values, self.interpolate(samples), 1e-10))
+        # print(np.allclose(values, self.interpolate(samples), 1e-10))
 
     def run_krig(self):
         print('UQpy: Performing Krig...')
@@ -443,7 +443,7 @@ class Krig:
         #         print('yes')
 
         r_ = self.corr_model(x=s_, s=s_, params=self.corr_model_params)
-        print(r_)
+        # print(r_)
         c = np.linalg.cholesky(r_)                   # Eq: 3.8, DACE
         c_inv = np.linalg.inv(c)
         f_dash = np.matmul(c_inv, f_)
