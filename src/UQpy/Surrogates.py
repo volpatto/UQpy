@@ -344,8 +344,7 @@ class Krig:
     # Authors: Mohit Chauhan, Matthew Lombardo
     # Last modified: 12/03/2018 by Mohit S. Chauhan
 
-    def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None,
-                 n_opt=1):
+    def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None):
 
         self.samples = samples
         self.values = values
@@ -353,10 +352,8 @@ class Krig:
         self.corr_model = corr_model
         self.corr_model_params = corr_model_params
         self.bounds = bounds
-        self.n_opt = n_opt
         self.init_krig()
         self.beta, self.gamma, self.sig, self.F_dash, self.C_inv, self.G = self.run_krig()
-        # print(np.allclose(values, self.interpolate(samples), 1e-10))
 
     def run_krig(self):
         print('UQpy: Performing Krig...')
@@ -384,9 +381,6 @@ class Krig:
                 cc = np.linalg.cholesky(r__)
             except np.linalg.LinAlgError:
                 return np.inf, np.zeros(n)
-
-            # if np.prod(np.diagonal(cc)) == 0:
-            #     return np.inf, np.zeros(n)
 
             c_in = np.linalg.inv(cc)
             r_in = np.matmul(c_in.T, c_in)
@@ -425,23 +419,6 @@ class Krig:
         p_ = optimize.fmin_l_bfgs_b(log_likelihood, self.corr_model_params, args=(s_, m_, n_, f_, y_),
                                     bounds=self.bounds)
         self.corr_model_params = p_[0]
-        print(p_[0], p_[1])
-        # if self.op == 'Yes':
-        #     sp = self.corr_model_params
-        #     p = np.zeros([self.n_opt, n_])
-        #     pf = np.zeros([self.n_opt, 1])
-        #     for i in range(self.n_opt):
-        #         # print('i=', i)
-        #         p_ = optimize.fmin_l_bfgs_b(log_likelihood, sp, args=(s_, m_, n_, f_, y_), bounds=self.bounds)
-        #         p[i, :] = p_[0]
-        #         pf[i, 0] = p_[1]
-        #         sp = stats.reciprocal.rvs([j[0] for j in self.bounds], [j[1] for j in self.bounds], 1)
-        #     t = np.argmin(pf)
-        #     # print(pf, p)
-        #     self.corr_model_params = p[t, :]
-        #     # print(t, p[t, :])
-        #     if t == 0:
-        #         print('yes')
 
         r_ = self.corr_model(x=s_, s=s_, params=self.corr_model_params)
         # print(r_)
@@ -486,19 +463,19 @@ class Krig:
         rx, drdx = self.corr_model(x=x, s=self.samples, params=self.corr_model_params, dx=True)
         y_grad = np.einsum('ijk,jm->ik', jf, self.beta) + np.einsum('ijk,jm->ki', drdx.T, self.gamma)
         # TODO: Formula used to estimate mse_grad is wrong.
-        if dy:
-            # Calculating: t1 = inv(f_dash.T*f_dash)
-            cf = np.linalg.cholesky(np.einsum('ij,jk->ik', self.F_dash.T, self.F_dash))
-            cf_inv = np.linalg.inv(cf)
-            t1 = np.matmul(np.transpose(cf_inv), cf_inv)
-            # Calculating: t2 = f_dash.T*inv(R)*r.T - jf*beta
-            t2 = np.einsum('ij,mjk->mik', self.F_dash.T, np.matmul(self.C_inv, rx.T)) - np.einsum('ijk,jm->imk', jf,
-                                                                                                  self.beta)
-            # Calculating: t3 = inv(R)*r'
-            r_inv = np.matmul(self.C_inv.T, self.C_inv)
-            t3 = np.einsum('ij,jk->ik', r_inv, rx.T)
-            mse_grad = (2 * self.sig ** 2) * (np.matmul(t1, t2) - t3)
-            return y_grad, mse_grad
+        # if dy:
+        #     # Calculating: t1 = inv(f_dash.T*f_dash)
+        #     cf = np.linalg.cholesky(np.einsum('ij,jk->ik', self.F_dash.T, self.F_dash))
+        #     cf_inv = np.linalg.inv(cf)
+        #     t1 = np.matmul(np.transpose(cf_inv), cf_inv)
+        #     # Calculating: t2 = f_dash.T*inv(R)*r.T - jf*beta
+        #     t2 = np.einsum('ij,mjk->mik', self.F_dash.T, np.matmul(self.C_inv, rx.T)) - np.einsum('ijk,jm->imk', jf,
+        #                                                                                           self.beta)
+        #     # Calculating: t3 = inv(R)*r'
+        #     r_inv = np.matmul(self.C_inv.T, self.C_inv)
+        #     t3 = np.einsum('ij,jk->ik', r_inv, rx.T)
+        #     mse_grad = (2 * self.sig ** 2) * (np.matmul(t1, t2) - t3)
+        #     return y_grad, mse_grad
         return y_grad
 
     def init_krig(self):
