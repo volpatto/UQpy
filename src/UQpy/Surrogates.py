@@ -371,20 +371,22 @@ class Krig:
         # Update the initial values of hyperparameters to ensure that covariance matrix is positive definite
         r_ = self.corr_model(x=s_, s=s_, params=self.corr_model_params)
         while np.linalg.det(r_) < 10**(-12):
+            print(self.corr_model_params, np.linalg.det(r_))
             self.corr_model_params = 1.5*self.corr_model_params
             r_ = self.corr_model(x=s_, s=s_, params=self.corr_model_params)
 
         from scipy import optimize
 
         def log_likelihood(p0, s, m, n, f, y):
+            print(p0)
             r__, dr_ = self.corr_model(x=s, s=s, params=p0, dt=True)
             try:
                 cc = np.linalg.cholesky(r__)
             except np.linalg.LinAlgError:
                 return np.inf, np.zeros(n)
 
-            if np.prod(np.diagonal(cc)) == 0:
-                return np.inf, np.zeros(n)
+            # if np.prod(np.diagonal(cc)) == 0:
+            #     return np.inf, np.zeros(n)
 
             c_in = np.linalg.inv(cc)
             r_in = np.matmul(c_in.T, c_in)
@@ -399,6 +401,7 @@ class Krig:
             t4 = np.matmul(tmp.T, alpha)
 
             ll = (np.log(np.prod(np.diagonal(cc))) + m*np.log(np.sum(t4)/m) + m * np.log(2 * np.pi)) / 2
+            print(ll)
             # ll = (np.log(np.prod(np.diagonal(cc))) + t4) / 2
 
             grad = np.zeros(n)
@@ -422,6 +425,7 @@ class Krig:
         p_ = optimize.fmin_l_bfgs_b(log_likelihood, self.corr_model_params, args=(s_, m_, n_, f_, y_),
                                     bounds=self.bounds)
         self.corr_model_params = p_[0]
+        print(p_[0], p_[1])
         # if self.op == 'Yes':
         #     sp = self.corr_model_params
         #     p = np.zeros([self.n_opt, n_])
@@ -477,12 +481,24 @@ class Krig:
         else:
             return y
 
-    def jacobian(self, x):
+    def jacobian(self, x, dy=False):
         fx, jf = self.reg_model(x)
         rx, drdx = self.corr_model(x=x, s=self.samples, params=self.corr_model_params, dx=True)
         y_grad = np.einsum('ijk,jm->ik', jf, self.beta) + np.einsum('ijk,jm->ki', drdx.T, self.gamma)
-        # TODO: Add uncertainty in gradient
-
+        # TODO: Formula used to estimate mse_grad is wrong.
+        if dy:
+            # Calculating: t1 = inv(f_dash.T*f_dash)
+            cf = np.linalg.cholesky(np.einsum('ij,jk->ik', self.F_dash.T, self.F_dash))
+            cf_inv = np.linalg.inv(cf)
+            t1 = np.matmul(np.transpose(cf_inv), cf_inv)
+            # Calculating: t2 = f_dash.T*inv(R)*r.T - jf*beta
+            t2 = np.einsum('ij,mjk->mik', self.F_dash.T, np.matmul(self.C_inv, rx.T)) - np.einsum('ijk,jm->imk', jf,
+                                                                                                  self.beta)
+            # Calculating: t3 = inv(R)*r'
+            r_inv = np.matmul(self.C_inv.T, self.C_inv)
+            t3 = np.einsum('ij,jk->ik', r_inv, rx.T)
+            mse_grad = (2 * self.sig ** 2) * (np.matmul(t1, t2) - t3)
+            return y_grad, mse_grad
         return y_grad
 
     def init_krig(self):
@@ -547,25 +563,19 @@ class Krig:
             def c(x, s, params, dt=False, dx=False):
                 rx, drdt, drdx = 0, 0, 0
                 x = np.atleast_2d(x)
+                # Create stack matrix, where each block is x_i with all s
+                stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
+                    np.size(x, 0),
+                    1, 1))
                 if model == 'Exponential':
-                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
-                    rx = np.exp(np.sum(-params * abs(dis), axis=2)).T
-                    drdt = -abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = -params * np.sign(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    rx = np.exp(np.sum(-params * abs(stack), axis=2)).T
+                    drdt = -abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    drdx = -params * np.sign(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                 elif model == 'Gaussian':
-                    dis = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
-                    rx = np.exp(np.sum(-params * (dis ** 2), axis=2)).T
-                    drdt = -(dis ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = -2 * params * abs(dis) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    rx = np.exp(np.sum(-params * (stack ** 2), axis=2)).T
+                    drdt = -(stack ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    drdx = -2 * params * abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                 elif model == 'Linear':
-                    # Create stack matrix, where each block is x_i with all s
-                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
                     # Taking stack and turning each d value into 1-theta*dij
                     after_parameters = 1 - params * abs(stack)
                     # Define matrix of zeros to compare against (not necessary to be defined separately,
@@ -589,16 +599,7 @@ class Krig:
                     for i in range(len(params) - 1):
                         drdt = drdt * np.roll(max_matrix, i + 1, axis=2)
                         drdx = drdx * np.roll(max_matrix, i + 1, axis=2)
-                    # Multiplying matrices by ones_and_zeros multiplication sets 0 values equal to
-                    # -0.0, so this comparison sets all -0.0 to 0.0 (Python should treat these the
-                    # same, but it looks better with 0.0)
-                    drdt[drdt == -0.0] = 0
-                    drdx[drdx == -0.0] = 0
                 elif model == 'Spherical':
-                    # Create stack matrix, where each block is x_i with all s
-                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
                     # Taking stack and creating array of all thetaj*dij
                     after_parameters = params * abs(stack)
                     # Create matrix of all ones to compare
@@ -629,14 +630,7 @@ class Krig:
                     for i in range(len(params) - 1):
                         drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
                         drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
-                    # Replace -0.0 with 0.0
-                    drdt[drdt == -0.0] = 0.0
-                    drdx[drdx == -0.0] = 0.0
                 elif model == 'Cubic':
-                    # Create stack matrix, where each block is x_i with all s
-                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
                     # Taking stack and creating array of all thetaj*dij
                     after_parameters = params * abs(stack)
                     # Create matrix of all ones to compare
@@ -667,14 +661,7 @@ class Krig:
                     for i in range(len(params) - 1):
                         drdt = drdt * np.roll(zeta_function, i + 1, axis=2)
                         drdx = drdx * np.roll(zeta_function, i + 1, axis=2)
-                    # Replace -0.0 with 0.0
-                    drdt[drdt == -0.0] = 0.0
-                    drdx[drdx == -0.0] = 0.0
                 elif model == 'Spline':
-                    # Create stack matrix, where each block is x_i with all s
-                    stack = np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) - np.tile(s, (
-                        np.size(x, 0),
-                        1, 1))
                     # In this case, the zeta value is just abs(stack)*parameters, no comparison
                     zeta_matrix = abs(stack) * params
                     # So, dtheta and dx are just |dj| and theta*sgn(dj), respectively
@@ -701,6 +688,8 @@ class Krig:
                                     sigma[i, j, k] = 0
                                     dsigma[i, j, k] = 0
 
+                    rx = np.prod(sigma, 2).T
+
                     # Initialize derivative matrices incorporating chain rule
                     drdt = dsigma * dtheta_derivs
                     drdx = dsigma * dx_derivs
@@ -710,9 +699,11 @@ class Krig:
                         drdt = drdt * np.roll(sigma, i + 1, axis=2)
                         drdx = drdx * np.roll(sigma, i + 1, axis=2)
 
-                    # Replace -0.0 with 0.0
-                    drdt[drdt == -0.0] = 0.0
-                    drdx[drdx == -0.0] = 0.0
+                # Multiplying matrices by ones_and_zeros multiplication sets 0 values equal to
+                # -0.0, so this comparison sets all -0.0 to 0.0 (Python should treat these the
+                # same, but it looks better with 0.0)
+                drdt[drdt == -0.0] = 0.0
+                drdx[drdx == -0.0] = 0.0
 
                 if dt:
                     return rx, drdt
@@ -727,12 +718,3 @@ class Krig:
             self.corr_model = corr(model=self.corr_model)
         else:
             raise NotImplementedError("Exit code: Doesn't recognize the Correlation model.")
-
-    # if q == 1:
-    #     print('hi')
-    #     sigma[l] = (1/m)*(np.linalg.norm(Y_dash - np.matmul(F_dash, beta))**2)
-    # else:
-    #     sigma[l] = (1 / m) * (np.linalg.norm(Y_dash[:, l] - np.matmul(F_dash, beta[:, l])) ** 2)
-    # print(sigma, sigma1)
-
-
