@@ -342,7 +342,7 @@ class Krig:
         """
 
     # Authors: Mohit Chauhan, Matthew Lombardo
-    # Last modified: 12/03/2018 by Mohit S. Chauhan
+    # Last modified: 12/17/2018 by Mohit S. Chauhan
 
     def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None):
 
