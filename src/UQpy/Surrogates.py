@@ -376,6 +376,7 @@ class Krig:
         from scipy import optimize
 
         def log_likelihood(p0, s, m, n, f, y, re=0):
+            # Return the log-likelihood function and it's gradient. Gradient is calculate using Central Difference
             r__, dr_ = self.corr_model(x=s, s=s, params=p0, dt=True)
             try:
                 cc = np.linalg.cholesky(r__)
@@ -385,6 +386,7 @@ class Krig:
                 else:
                     return np.inf
 
+            # Product of diagonal terms is negligible sometimes, even when cc exists.
             if np.prod(np.diagonal(cc)) == 0:
                 if re == 0:
                     return np.inf, np.zeros(n)
@@ -398,6 +400,7 @@ class Krig:
             alpha = np.matmul(r_in, tmp)
             t4 = np.matmul(tmp.T, alpha)
 
+            # Objective function:= log(det(R)) + Y^T inv(R) Y + constant
             ll = (np.log(np.prod(np.diagonal(cc))) + t4 + m * np.log(2 * np.pi))/2
             if re == 1:
                 return ll
@@ -418,6 +421,7 @@ class Krig:
 
             return ll, grad
 
+        # Maximum Likelihood Estimation : Solving optimization problem to calculate hyperparameters
         if self.op == 'Yes':
             sp = self.corr_model_params
             p = np.zeros([self.n_opt, n_])

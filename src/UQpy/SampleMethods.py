@@ -630,7 +630,7 @@ class RSS:
             :type model: str
 
             :param meta: A string specifying the method used to estimate the gradient.
-                         Options: Delaunay, Kriging_UQpy and Kriging_Sklearn
+                         Options: Delaunay, Kriging
             :type meta: str
 
             :param cell: A string specifying the stratification of sample domain.
@@ -640,28 +640,29 @@ class RSS:
             :param nsamples: Final size of the samples.
             :type nsamples: int
 
-            :param min_train_size: An list or array containing weights associated with different samples.
-                                         Options:
-                                            If weights_distribution is None, then default value is assigned.
-                                            If size of weights_distribution is 1xd, then it is assigned as dot product
-                                                of weights_distribution and default value.
-                                            Otherwise size of weights_distribution should be equal to Nxd.
-                                         Default: weights_distribution = Nxd dimensional array with all elements equal
-                                         to 1.
+            :param min_train_size: Minimum size of training data around new sample used to update surrogate.
+                                   Default: nsamples
             :type min_train_size: int
 
             :param step_size: Step size to calculate the gradient using central difference. Only required if Delaunay is
                               used as surrogate approximation.
             :type step_size: float
 
-            :param corr_model: Correlation model used to estimate gradient by defining kriging surrogate. Only required
-                               if Krig_UQpy is used as surrogate approximation.
+            :param reg_model: Regression model used to estimate gradient by using kriging surrogate. Only required
+                               if kriging is used as surrogate approximation.
+            :type reg_model: str
+
+            :param corr_model: Correlation model used to estimate gradient by using kriging surrogate. Only required
+                               if kriging is used as surrogate approximation.
             :type corr_model: str
 
-            :param corr_model_params: Correlation model parameters used to estimate gradient by defining kriging
-                                      surrogate. If meta=Kriging_UQpy, it is an array defining initial estimate of
-                                      hyperparameters (optional). If meta=Kriging_Sklearn, it is correlation function.
-            :type corr_model_params: array or function
+            :param corr_model_params: Correlation model parameters used to estimate hyperparamters for kriging
+                                      surrogate.
+            :type corr_model_params: ndarray
+
+            :param n_opt: Number of times optimization problem is to be solved with different starting point.
+                          Default: 1
+            :type n_opt: int
 
         Output:
             :return: RSS.samples: Final/expanded samples.
@@ -676,13 +677,10 @@ class RSS:
     # Last modified: 12/03/2018 by Mohit S. Chauhan
 
     def __init__(self, x=None, model=None, meta='Delaunay', cell='Rectangular', nsamples=None,
-                 min_train_size=None, step_size=0.005, corr_model='Gaussian', corr_model_params=None):
+                 min_train_size=None, step_size=0.005, corr_model='Gaussian', reg_model='Quadratic',
+                 corr_model_params=None, n_opt=10):
 
-        self.samples = x.samples
-        self.samplesU01 = x.samplesU01
-        self.distribution = x.distribution
-        self.dist_params = x.dist_params
-        self.strata = x.strata
+        self.x = x
         self.model = model
         self.option = 'Refined'
         self.meta = meta
@@ -693,7 +691,14 @@ class RSS:
         self.step_size = step_size
         self.corr_model = corr_model
         self.corr_model_params = corr_model_params
+        self.reg_model = reg_model
+        self.n_opt = n_opt
         self.init_rss()
+        self.samples = x.samples
+        self.samplesU01 = x.samplesU01
+        self.distribution = x.distribution
+        self.dist_params = x.dist_params
+        self.strata = x.strata
         self.values = self.run_rss()
 
     def run_rss(self):
@@ -718,17 +723,17 @@ class RSS:
                 dydx[:, dirr] = ((f.__call__(hi) - f.__call__(low)) / h)[:, 0]
             return dydx
 
-        def gradient(x, y, corr_m_p, corr_m, xt):
+        def surrogate(x, y, corr_m_p, reg_m, corr_m, xt, n):
             if self.meta == 'Delaunay':
-                # TODO: Check this case.
                 tck = LinearNDInterpolator(x, y, fill_value=0)
                 gr = cent_diff(tck, xt, self.step_size)
-            elif self.meta == 'Kriging_UQpy':
+            elif self.meta == 'Kriging':
                 with suppress_stdout():  # disable printing output comments
-                    tck = Krig(samples=x, values=y, reg_model='Quadratic', corr_model=corr_m,
-                               corr_model_params=corr_m_p, bounds=[[0.001, 10 ** 7]] * x.shape[1])
+                    tck = Krig(samples=x, values=y, reg_model=reg_m, corr_model=corr_m, corr_model_params=corr_m_p,
+                               n_opt=n)
                 corr_m_p = tck.corr_model_params
-                gr = tck.jacobian(xt)
+                gr = cent_diff(tck.interpolate, xt, self.step_size)
+                # gr = tck.jacobian(xt)
             elif self.meta == 'Kriging_Sklearn':
                 gp = GaussianProcessRegressor(kernel=corr_m, n_restarts_optimizer=0)
                 gp.fit(x, y)
@@ -755,6 +760,7 @@ class RSS:
         values, dydx1, tri = 0, 0, 0
         dimension = self.samples.shape[1]
 
+        # Adding corner vertices of sample domain to create Delaunay triangulation
         if self.cell == 'Voronoi':
             lst = np.array(list(itertools.product([0, 1], repeat=dimension)))
             self.points = np.vstack([lst, self.samplesU01])
@@ -770,25 +776,27 @@ class RSS:
             with suppress_stdout():  # disable printing output comments
                 values = np.array(RunModel(self.points, model_script=self.model).qoi_list)
             if self.cell == 'Rectangular':
-                dydx1, self.corr_model_params = gradient(self.points, values, self.corr_model_params,
-                                                         self.corr_model, self.strata.origins+0.5*self.strata.widths)
+                dydx1, self.corr_model_params = surrogate(self.points, values, self.corr_model_params,
+                                                          self.reg_model, self.corr_model,
+                                                          self.strata.origins + 0.5 * self.strata.widths, self.n_opt)
             else:
-                dydx1, self.corr_model_params = gradient(self.points, values, self.corr_model_params,
-                                                         self.corr_model, np.mean(tri.points[tri.simplices], 1))
+                simplex = getattr(tri, 'simplices')
+                dydx1, self.corr_model_params = surrogate(self.points, values, self.corr_model_params, self.reg_model,
+                                                          self.corr_model, np.mean(tri.points[simplex], 1),
+                                                          self.n_opt)
 
         initial_s = np.size(self.samplesU01, 0)
         for i in range(initial_s, self.nsamples):
-
             if self.cell == 'Rectangular':
                 # Determine the stratum to break
                 if self.option == 'Gradient':
                     # Estimate the variance within each stratum by assuming a uniform distribution over the stratum.
                     # All input variables are independent
-                    var = (1/12)*self.strata.widths**2
+                    var = (1 / 12) * self.strata.widths ** 2
                     # Estimate the variance over the stratum by Delta Method
                     s = np.zeros([i, 1])
                     for j in range(i):
-                        s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (self.strata.weights[j]**2))
+                        s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (self.strata.weights[j] ** 2))
                     bin2break = np.argmax(s)
                 else:
                     w = np.argwhere(self.strata.weights == np.amax(self.strata.weights))
@@ -806,10 +814,11 @@ class RSS:
                     t = np.argwhere(cut_dir_temp == np.amax(cut_dir_temp))
                     dir2break = t[np.argmax(abs(dydx1[bin2break, t]))]
 
-                # Divide the stratum bin2break in the direction dir2break
+                # Modify the widths of updated bin
                 self.strata.widths[bin2break, dir2break] = self.strata.widths[bin2break, dir2break] / 2
+                # Add the widths of new bin
                 self.strata.widths = np.vstack([self.strata.widths, self.strata.widths[bin2break, :]])
-
+                # Add the origins of new bin
                 self.strata.origins = np.vstack([self.strata.origins, self.strata.origins[bin2break, :]])
                 if self.samplesU01[bin2break, dir2break] < self.strata.origins[-1, dir2break] + \
                         self.strata.widths[bin2break, dir2break]:
@@ -818,8 +827,9 @@ class RSS:
                 else:
                     self.strata.origins[bin2break, dir2break] = self.strata.origins[bin2break, dir2break] + \
                                                                 self.strata.widths[bin2break, dir2break]
-
+                # Modify the weights of updated bin
                 self.strata.weights[bin2break] = self.strata.weights[bin2break] / 2
+                # Add the weights of new bin
                 self.strata.weights = np.append(self.strata.weights, self.strata.weights[bin2break])
 
                 # Add an uniform random sample inside new stratum
@@ -833,35 +843,38 @@ class RSS:
                 self.samples = np.vstack([self.samples, new])
 
             elif self.cell == 'Voronoi':
+                simplex = getattr(tri, 'simplices')
                 # Estimate the variance over the stratum by Delta Method
-                weights = np.zeros(((np.size(tri.simplices, 0)), 1))
-                var = np.zeros((np.size(tri.simplices, 0), dimension))
-                s = np.zeros(((np.size(tri.simplices, 0)), 1))
-                for j in range((np.size(tri.simplices, 0))):
+                weights = np.zeros(((np.size(simplex, 0)), 1))
+                var = np.zeros((np.size(simplex, 0), dimension))
+                s = np.zeros(((np.size(simplex, 0)), 1))
+                for j in range((np.size(simplex, 0))):
                     # Define Simplex
-                    sim = self.points[tri.simplices[j, :]]
+                    sim = self.points[simplex[j, :]]
                     # Estimate the volume of simplex
                     v1 = np.concatenate((np.ones([np.size(sim, 0), 1]), sim), 1)
-                    weights[j] = (1 / math.factorial(np.size(tri.simplices[j, :]) - 1)) * np.linalg.det(v1)
+                    weights[j] = (1 / math.factorial(np.size(simplex[j, :]) - 1)) * np.linalg.det(v1)
                     if self.option == 'Gradient':
                         for k in range(dimension):
                             # Estimate standard deviation of points
                             from statistics import stdev
                             std = stdev(sim[:, k].tolist())
                             var[j, k] = (weights[j] * math.factorial(dimension) / math.factorial(dimension + 2)) * (
-                                         dimension * std ** 2)
+                                    dimension * std ** 2)
                         s[j, 0] = np.sum(dydx1[j, :] * var[j, :] * dydx1[j, :] * (weights[j] ** 2))
+
                 if self.option == 'Refined':
                     w = np.argwhere(weights[:, 0] == np.amax(weights[:, 0]))
                     bin2add = w[0, np.random.randint(len(w))]
                 else:
                     bin2add = np.argmax(s)
-                # Creating sub-simplex, node is an array containing mid-point of edges
-                tmp = self.points[tri.simplices[bin2add, :]]
-                col_one = np.array(list(itertools.combinations(np.arange(dimension+1), dimension)))
-                node = np.zeros_like(tmp)
-                for m in range(dimension+1):
-                    node[m, :] = np.sum(tmp[col_one[m]-1, :], 0)/dimension
+
+                # Creating sub-simplex
+                tmp = self.points[simplex[bin2add, :]]
+                col_one = np.array(list(itertools.combinations(np.arange(dimension + 1), dimension)))
+                node = np.zeros_like(tmp)    # node: an array containing mid-point of edges
+                for m in range(dimension + 1):
+                    node[m, :] = np.sum(tmp[col_one[m] - 1, :], 0) / dimension
 
                 # Using Simplex class to generate new sample
                 new = Simplex(nodes=node, nsamples=1).samples
@@ -878,6 +891,7 @@ class RSS:
                 raise NotImplementedError("Exit code: Does not identify 'cell'.")
 
             if self.option == 'Gradient':
+
                 with suppress_stdout():  # disable printing output comments
                     y_new = RunModel(np.atleast_2d(self.samples[i, :]), model_script=self.model).qoi_list
                 values = np.vstack([values, y_new])
@@ -888,8 +902,9 @@ class RSS:
                         in_train = np.arange(self.points.shape[0])
                         in_update = np.arange(i)
                     else:
+                        simplex = getattr(tri, 'simplices')
                         in_train = np.arange(self.points.shape[0])
-                        in_update = np.arange(tri.simplices.shape[0])
+                        in_update = np.arange(simplex.shape[0])
                 else:
                     # Local surrogate updating: Update the surrogate model using min_train_size
                     if self.cell == 'Rectangular':
@@ -899,44 +914,66 @@ class RSS:
                         else:
                             in_train = local(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
                                              np.amax(self.strata.widths))
-                        in_update = local(self.samplesU01[i, :], self.strata.origins + .5*self.strata.widths,
-                                          self.min_train_size/2, np.amax(self.strata.widths))
+                        in_update = local(self.samplesU01[i, :], self.strata.origins + .5 * self.strata.widths,
+                                          self.min_train_size / 2, np.amax(self.strata.widths))
                     else:
+                        simplex = getattr(tri, 'simplices')
                         # in_train: Indices of samples used to update surrogate approximation
                         in_train = local(self.samplesU01[i, :], self.samplesU01, self.min_train_size,
                                          np.amax(np.sqrt(self.strata.weights)))
                         # in_update: Indices of centroid of simplex, where gradient is updated
-                        in_update = local(self.samplesU01[i, :], np.mean(tri.points[tri.simplices], 1),
-                                          self.min_train_size/2, np.amax(np.sqrt(self.strata.weights)))
+                        in_update = local(self.samplesU01[i, :], np.mean(tri.points[simplex], 1),
+                                          self.min_train_size / 2, np.amax(np.sqrt(self.strata.weights)))
 
                 # Update the surrogate model & the store the updated gradients
                 if self.cell == 'Rectangular':
                     dydx1 = np.vstack([dydx1, np.zeros(dimension)])
-                    dydx1[in_update, :], self.corr_model_params = gradient(self.points[in_train, :],
-                                                                           values[in_train, :],
-                                                                           self.corr_model_params, self.corr_model,
-                                                                           self.strata.origins[in_update, :] +
-                                                                           .5*self.strata.widths[in_update, :])
+                    dydx1[in_update, :], self.corr_model_params = surrogate(self.points[in_train, :],
+                                                                            values[in_train, :],
+                                                                            self.corr_model_params, self.reg_model,
+                                                                            self.corr_model,
+                                                                            self.strata.origins[in_update, :] +
+                                                                            .5 * self.strata.widths[in_update, :], 1)
                 else:
-                    dydx1 = np.vstack([dydx1, np.zeros([tri.simplices.shape[0]-dydx1.shape[0], dimension])])
-                    dydx1[in_update, :], self.corr_model_params = gradient(self.points[in_train, :],
-                                                                           values[in_train, :],
-                                                                           self.corr_model_params,
-                                                                           self.corr_model,
-                                                                           np.mean(tri.points[
-                                                                                       tri.simplices[in_update, :]],
-                                                                                   1))
+                    simplex = getattr(tri, 'simplices')
+                    dydx1 = np.vstack([dydx1, np.zeros([simplex.shape[0] - dydx1.shape[0], dimension])])
+                    dydx1[in_update, :], self.corr_model_params = surrogate(self.points[in_train, :],
+                                                                            values[in_train, :],
+                                                                            self.corr_model_params,
+                                                                            self.reg_model, self.corr_model,
+                                                                            np.mean(tri.points[
+                                                                                        simplex[in_update, :]],
+                                                                                    1), 1)
         print('Done!')
         if self.option == 'Gradient':
             if self.cell == 'Rectangular':
                 if self.meta != 'Delaunay':
                     return values
             else:
-                return values[2**dimension:, :]
+                return values[2 ** dimension:, :]
 
     def init_rss(self):
+        if type(self.x).__name__ not in ['STS', 'RSS']:
+            raise NotImplementedError("Exit code: x should be a class object from STS or RSS class.")
+
         if self.model is not None:
             self.option = 'Gradient'
+
+        if self.meta is None:
+            self.meta = 'Delaunay'
+        elif self.meta not in ['Delaunay', 'Kriging', 'Kriging_Sklearn']:
+            raise NotImplementedError("Exit code: Input 'meta' is not specified correctly.")
+
+        if self.cell is None:
+            self.cell = 'Rectangular'
+        elif self.cell not in ['Rectangular', 'Voronoi']:
+            raise NotImplementedError("Exit code: Input 'cell' is not specified correctly.")
+
+        if type(self.nsamples).__name__ != 'int':
+            raise NotImplementedError("Exit code: nsamples should be integer.")
+        if self.nsamples <= self.x.samples.shape[0]:
+            raise NotImplementedError("Exit code: Already have desired number of samples.")
+
         if self.min_train_size is None:
             self.min_train_size = self.nsamples
 
