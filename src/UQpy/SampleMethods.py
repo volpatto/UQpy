@@ -1045,7 +1045,7 @@ class Simplex:
 
 ########################################################################################################################
 ########################################################################################################################
-#                                         Refined Stratified Sampling (RSS)
+#                                         Adaptive Kriging- Monte Carlo Simulation (AK-MCS)
 ########################################################################################################################
 
 
@@ -1054,16 +1054,9 @@ class AKMCS:
 
         Description:
 
-            Generate new samples using adaptive sampling methods, i.e. Refined Stratified Sampling and Gradient
-            Enhanced Refined Stratified Sampling.
+            Generate new samples using active learning method and properties of kriging surrogate along with MCS.
 
             References:
-            Michael D. Shields, Kirubel Teferra, Adam Hapij and Raymond P. Daddazio, "Refined Stratified Sampling for
-                efficient Monte Carlo based uncertainty quantification", Reliability Engineering & System Safety,
-                ISSN: 0951-8320, Vol: 142, Page: 310-325, 2015.
-
-            M. D. Shields, "Adaptive Monte Carlo analysis for strongly nonlinear stochastic systems",
-                Reliability Engineering & System Safety, ISSN: 0951-8320, Vol: 175, Page: 207-224, 2018.
         Input:
             :param model: Python model which is used to evaluate the function value
             :type model: str
