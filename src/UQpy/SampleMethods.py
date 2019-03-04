@@ -732,8 +732,8 @@ class RSS:
                     tck = Krig(samples=x, values=y, reg_model=reg_m, corr_model=corr_m, corr_model_params=corr_m_p,
                                n_opt=n)
                 corr_m_p = tck.corr_model_params
-                gr = cent_diff(tck.interpolate, xt, self.step_size)
-                # gr = tck.jacobian(xt)
+                # gr = cent_diff(tck.interpolate, xt, self.step_size)
+                gr = tck.jacobian(xt)
             elif self.meta == 'Kriging_Sklearn':
                 gp = GaussianProcessRegressor(kernel=corr_m, n_restarts_optimizer=0)
                 gp.fit(x, y)
@@ -1041,6 +1041,132 @@ class Simplex:
 
         if self.nodes.shape[0] != self.nodes.shape[1] + 1:
             raise NotImplementedError("Size of simplex (nodes) is not consistent.")
+
+
+########################################################################################################################
+########################################################################################################################
+#                                         Refined Stratified Sampling (RSS)
+########################################################################################################################
+
+
+class AKMCS:
+    """
+
+        Description:
+
+            Generate new samples using adaptive sampling methods, i.e. Refined Stratified Sampling and Gradient
+            Enhanced Refined Stratified Sampling.
+
+            References:
+            Michael D. Shields, Kirubel Teferra, Adam Hapij and Raymond P. Daddazio, "Refined Stratified Sampling for
+                efficient Monte Carlo based uncertainty quantification", Reliability Engineering & System Safety,
+                ISSN: 0951-8320, Vol: 142, Page: 310-325, 2015.
+
+            M. D. Shields, "Adaptive Monte Carlo analysis for strongly nonlinear stochastic systems",
+                Reliability Engineering & System Safety, ISSN: 0951-8320, Vol: 175, Page: 207-224, 2018.
+        Input:
+            :param model: Python model which is used to evaluate the function value
+            :type model: str
+
+        Output:
+            :return: AKMCS.samples: Final/expanded samples.
+            :rtype: AKMCS.samples: ndarray
+
+    """
+
+    # Authors: Mohit S. Chauhan
+    # Last modified: 03/01/2019 by Mohit S. Chauhan
+
+    def __init__(self, model=None, dist_name=None, dist_params=None, nsamples=None, n_doe=None, lf=None,
+                 corr_model='Gaussian', reg_model='Quadratic', corr_model_params=None, n_opt=10, n_add=2, min_cov=None):
+
+        self.model = model
+        self.dist_name = dist_name
+        self.dist_params = dist_params
+        self.nsamples = nsamples
+        self.n_DoE = n_doe
+        self.lf = lf
+        self.corr_model = corr_model
+        self.corr_model_params = corr_model_params
+        self.reg_model = reg_model
+        self.n_opt = n_opt
+        self.n_add = n_add
+        self.min_cov = min_cov
+        self.population, self.DoE = 0, 0
+        self.init_akmcs()
+        self.learning()
+        self.values, self.pf, self.cov_pf = self.run_akmcs()
+
+    def run_akmcs(self):
+        from UQpy.RunModel import RunModel
+        from UQpy.Surrogates import Krig
+
+        print('UQpy: Performing AK-MCS design...')
+        m = MCS(dist_name=self.dist_name, dist_params=self.dist_params, nsamples=self.nsamples)
+        self.population = m.samples
+        self.DoE = np.random.permutation(self.population)[:self.n_DoE]
+        values = np.array(RunModel(self.DoE, model_script=self.model).qoi_list)
+        pf, cov_pf = 1, 1
+        while cov_pf > self.min_cov:
+            n_ = self.population.shape[0]
+            n = self.DoE.shape[0]
+
+            with suppress_stdout():  # disable printing output comments
+                k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
+                         corr_model_params=self.corr_model_params, n_opt=self.n_opt)
+            tmp = k.corr_model_params
+
+            for i in range(n, n_, self.n_add):
+                new, ind = self.lf(k, np.array([x for x in self.population.tolist() if x not in self.DoE.tolist()]),
+                                   self.n_add)
+                print(i)
+                self.DoE = np.vstack([self.DoE, new])
+
+                v_new = np.array(RunModel(np.atleast_2d(new), model_script=self.model).qoi_list)
+                values = np.vstack([values, v_new])
+
+                if ind:
+                    break
+                with suppress_stdout():  # disable printing output comments
+                    k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
+                             corr_model_params=tmp)
+                tmp = k.corr_model_params
+
+            pf = np.sum(np.array(values) < 0)/n_
+            print(pf)
+            cov_pf = np.sqrt((1 - pf)/(pf * n_))
+            if cov_pf > self.min_cov:
+                print("Notice: Increasing total population by 20%")
+                m = MCS(dist_name=self.dist_name, dist_params=self.dist_params, nsamples=int(0.2*m.nsamples))
+                self.population = np.vstack([self.population, m.samples])
+
+        print('Done!')
+        return values, pf, cov_pf
+
+    def learning(self):
+        def alf(learning_function):
+            def c(surr, pop, a):
+                if learning_function == 'U':
+                    g, sig = surr.interpolate(pop, dy=True)
+                    u = abs(g)/sig
+                    rows = u[:, 0].argsort()[:a]
+                    indicator = False
+                    if min(u) >= 2:
+                        indicator = True
+
+                    return pop[rows, :], indicator
+            return c
+        if type(self.lf).__name__ == 'function':
+            self.lf = self.lf
+        elif self.lf in ['EFF', 'U', 'Weighted-U', 'EIF', 'New']:
+            self.lf = alf(learning_function=self.lf)
+        else:
+            raise NotImplementedError("Exit code: Doesn't recognize the active learning function.")
+
+    def init_akmcs(self):
+
+        if self.model is None:
+            raise NotImplementedError("Exit code: Model should be defined.")
 
 
 ########################################################################################################################

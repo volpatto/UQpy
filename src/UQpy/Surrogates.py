@@ -20,7 +20,6 @@
 import numpy as np
 import scipy.stats as stats
 from UQpy.Distributions import *
-from scipy.spatial.distance import pdist, cdist, squareform
 
 
 ########################################################################################################################
@@ -328,10 +327,10 @@ class Krig:
                                likelihood estimator. This should be a closed bound.
                                Default: [0.001, 10**7] for each hyperparamter.
                 :type bounds: list
-                :param op: Indicator to solve MLE problem or not. If 'Yes' corr_model_params will be used as initial
+                :param op: Indicator to solve MLE problem or not. If 'True' corr_model_params will be used as initial
                            solution for optimization problem. Otherwise, corr_model_params will be directly use as
-                           hyperparamter. Default: 'Yes'.
-                :type op: str
+                           hyperparamter. Default: 'True'.
+                :type op: boolean
                 :param n_opt: Number of times optimization problem is to be solved with different starting point.
                               Default: 1
                 :type n_opt: int
@@ -345,10 +344,10 @@ class Krig:
     # Last modified: 12/17/2018 by Mohit S. Chauhan
 
     def __init__(self, samples=None, values=None, reg_model=None, corr_model=None, corr_model_params=None, bounds=None,
-                 op='Yes', n_opt=1):
+                 op=True, n_opt=1):
 
-        self.samples = samples
-        self.values = values
+        self.samples = np.array(samples)
+        self.values = np.array(values)
         self.reg_model = reg_model
         self.corr_model = corr_model
         self.corr_model_params = corr_model_params
@@ -374,12 +373,41 @@ class Krig:
         f_, jf_ = self.reg_model(s_)
 
         from scipy import optimize
+        from scipy.linalg import cholesky, cho_solve
+        # def log_likelihood(p0, s, m, n, y):
+        #     # Return the log-likelihood function and it's gradient. Gradient is calculate using Central Difference
+        #     r__, dr_ = self.corr_model(x=s, s=s, params=p0, dt=True)
+        #     try:
+        #         cc = np.linalg.cholesky(r__)
+        #     except np.linalg.LinAlgError:
+        #         return np.inf, np.zeros(n)
+        #
+        #     # Product of diagonal terms is negligible sometimes, even when cc exists.
+        #     if np.prod(np.diagonal(cc)) == 0:
+        #         return np.inf, np.zeros(n)
+        #
+        #     c_in = np.linalg.inv(cc)
+        #     r_in = np.matmul(c_in.T, c_in)
+        #
+        #     tmp = y
+        #     alpha = np.matmul(r_in, tmp)
+        #     t4 = np.matmul(tmp.T, alpha)
+        #
+        #     # Objective function:= log(det(R)) + Y^T inv(R) Y + constant
+        #     ll = (np.log(np.prod(np.diagonal(cc))) + t4 + m * np.log(2 * np.pi))/2
+        #
+        #     # Gradient: Eq(5.9) C. E. Rasmussen & C. K. I. Williams, Gaussian Processes for Machine Learning
+        #     grad = np.zeros([n, 1])
+        #     for i in range(n):
+        #         grad[i, 0] = -np.trace(np.matmul((np.matmul(alpha, alpha.T) - r_in), dr_[i, :, :]))/2
+        #
+        #     return ll, grad
 
         def log_likelihood(p0, s, m, n, f, y, re=0):
             # Return the log-likelihood function and it's gradient. Gradient is calculate using Central Difference
             r__, dr_ = self.corr_model(x=s, s=s, params=p0, dt=True)
             try:
-                cc = np.linalg.cholesky(r__)
+                cc = cholesky(r__, lower=True)
             except np.linalg.LinAlgError:
                 if re == 0:
                     return np.inf, np.zeros(n)
@@ -393,19 +421,28 @@ class Krig:
                 else:
                     return np.inf
 
-            c_in = np.linalg.inv(cc)
-            r_in = np.matmul(c_in.T, c_in)
-
-            tmp = y
-            alpha = np.matmul(r_in, tmp)
-            t4 = np.matmul(tmp.T, alpha)
+            # alpha = inv(R)*y
+            alpha = cho_solve((cc, True), y)
+            t4 = np.einsum("ik,ik->k", y, alpha)
 
             # Objective function:= log(det(R)) + Y^T inv(R) Y + constant
-            ll = (np.log(np.prod(np.diagonal(cc))) + t4 + m * np.log(2 * np.pi))/2
+            ll = (np.log(np.prod(np.diagonal(cc))) + t4 + m * np.log(2 * np.pi)) / 2
             if re == 1:
                 return ll
 
-            grad = np.zeros(n)
+            # Gradient: Eq(5.9) C. E. Rasmussen & C. K. I. Williams, Gaussian Processes for Machine Learning
+            r_in = cho_solve((cc, True), np.eye(m))[:, :, np.newaxis]
+            tmp = np.einsum("ij,kj->ikj", alpha, alpha)
+            tmp -= r_in
+            # print(r__, dr_)
+            # grad = -np.einsum("ijl,ijk->kl", tmp, dr_).sum(-1) / 2
+            grad = np.zeros([n, 1])
+            for i in range(n):
+                # grad[i, 0] = (np.matmul(alpha.T, np.matmul(dr_[:, :, i], alpha))-np.trace(np.matmul(r_in[:, :, 0],
+                #                                                                                     dr_[:, :, i])))/2
+                grad[i, 0] = -np.trace(np.matmul(tmp[:, :, 0], dr_[:, :, i]))/2
+
+            grad1 = np.zeros(n)
             h = 0.005
             for dr in range(n):
                 temp = np.zeros(n)
@@ -415,23 +452,31 @@ class Krig:
                 f_hi = log_likelihood(hi, s, m, n, f, y, 1)
                 f_low = log_likelihood(low, s, m, n, f, y, 1)
                 if f_hi == np.inf or f_low == np.inf:
-                    grad[dr] = 0
+                    grad1[dr] = 0
                 else:
-                    grad[dr] = (f_hi-f_low)/h
+                    grad1[dr] = (f_hi - f_low) / h
 
-            return ll, grad
+            # print('p0', p0, 'grad', grad, 'grad1', grad1)
+
+            return ll, grad1
 
         # Maximum Likelihood Estimation : Solving optimization problem to calculate hyperparameters
-        if self.op == 'Yes':
+        if self.op:
             sp = self.corr_model_params
             p = np.zeros([self.n_opt, n_])
             pf = np.zeros([self.n_opt, 1])
             for i__ in range(self.n_opt):
+                # print("----------------------------------", i__, "-------------------------------------")
                 p_ = optimize.fmin_l_bfgs_b(log_likelihood, sp, args=(s_, m_, n_, f_, y_), bounds=self.bounds)
                 p[i__, :] = p_[0]
                 pf[i__, 0] = p_[1]
+                # print(i__, p_[0], p_[1])
+                # Generating new starting points using log-uniform distribution
                 if i__ != self.n_opt - 1:
                     sp = stats.reciprocal.rvs([j[0] for j in self.bounds], [j[1] for j in self.bounds], 1)
+            if min(pf) == np.inf:
+                raise NotImplementedError("Maximum likelihood estimator failed: Choose different starting point or "
+                                          "increase n_opt")
             t = np.argmin(pf)
             self.corr_model_params = p[t, :]
 
@@ -470,18 +515,20 @@ class Krig:
             u = np.einsum('ij,jk->ik', self.F_dash.T, r_dash)-fx.T
             norm1 = np.sum(r_dash**2, 0)**0.5
             norm2 = np.sum(np.linalg.solve(self.G, u)**2, 0)**0.5
-            mse = (self.sig ** 2) * (1 + norm2**2 - norm1**2)
+            mse = (self.std_y**2)*(self.sig ** 2) * (1 + norm2**2 - norm1**2)
             return y, mse.reshape(y.shape)
         else:
             return y
 
     def jacobian(self, x, dy=False):
+        x = (x - self.mean_s) / self.std_s
+        s_ = (self.samples - self.mean_s) / self.std_s
         fx, jf = self.reg_model(x)
-        rx, drdx = self.corr_model(x=x, s=self.samples, params=self.corr_model_params, dx=True)
+        rx, drdx = self.corr_model(x=x, s=s_, params=self.corr_model_params, dx=True)
         # print(jf.shape, self.beta.shape, drdx.T.shape, self.gamma.shape)
         a = np.einsum('ikj,jm->ik', jf, self.beta)
         b = np.einsum('ijk,jm->ki', drdx.T, self.gamma)
-        y_grad = a + b
+        y_grad = (a + b)*self.std_y/self.std_s
         # if dy:
         #     # Calculating: t1 = inv(f_dash.T*f_dash)
         #     cf = np.linalg.cholesky(np.einsum('ij,jk->ik', self.F_dash.T, self.F_dash))
@@ -500,7 +547,7 @@ class Krig:
 
     def init_krig(self):
         if self.reg_model is None:
-            raise NotImplementedError("Exit code: Correlation model is not defined.")
+            raise NotImplementedError("Exit code: Regression model is not defined.")
 
         if self.corr_model is None:
             raise NotImplementedError("Exit code: Correlation model is not defined.")
@@ -567,7 +614,7 @@ class Krig:
                     np.size(x, 0),
                     1, 1))
                 if model == 'Exponential':
-                    rx = np.exp(np.sum(-params * abs(stack), axis=2)).T
+                    rx = np.exp(np.sum(-params * abs(stack), axis=2))
                     drdt = -abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                     drdx = params * np.sign(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                 elif model == 'Gaussian':
