@@ -1045,7 +1045,7 @@ class Simplex:
 
 ########################################################################################################################
 ########################################################################################################################
-#                                         Adaptive Kriging- Monte Carlo Simulation (AK-MCS)
+#                                  Adaptive Kriging-Monte Carlo Simulation (AK-MCS)
 ########################################################################################################################
 
 
@@ -1070,13 +1070,15 @@ class AKMCS:
     # Authors: Mohit S. Chauhan
     # Last modified: 03/01/2019 by Mohit S. Chauhan
 
-    def __init__(self, model=None, dist_name=None, dist_params=None, nsamples=None, n_doe=None, lf=None,
-                 corr_model='Gaussian', reg_model='Quadratic', corr_model_params=None, n_opt=10, n_add=2, min_cov=None):
+    def __init__(self, model=None, dist_name=None, dist_params=None, nsamples=None, n_doe=None, doe=None, lf=None,
+                 corr_model='Gaussian', reg_model='Linear', corr_model_params=None, n_opt=10, n_add=2, min_cov=None,
+                 n_stop=None):
 
         self.model = model
         self.dist_name = dist_name
         self.dist_params = dist_params
         self.nsamples = nsamples
+        self.DoE = doe
         self.n_DoE = n_doe
         self.lf = lf
         self.corr_model = corr_model
@@ -1084,67 +1086,164 @@ class AKMCS:
         self.reg_model = reg_model
         self.n_opt = n_opt
         self.n_add = n_add
+        self.n_stop = n_stop
         self.min_cov = min_cov
-        self.population, self.DoE = 0, 0
+        self.population = 0
+        self.kriging = 'UQpy'
         self.init_akmcs()
         self.learning()
-        self.values, self.pf, self.cov_pf = self.run_akmcs()
+        self.values, self.pf, self.cov_pf, self.pr = self.run_akmcs()
 
     def run_akmcs(self):
         from UQpy.RunModel import RunModel
         from UQpy.Surrogates import Krig
+        from sklearn.gaussian_process import GaussianProcessRegressor
 
         print('UQpy: Performing AK-MCS design...')
         m = MCS(dist_name=self.dist_name, dist_params=self.dist_params, nsamples=self.nsamples)
         self.population = m.samples
-        self.DoE = np.random.permutation(self.population)[:self.n_DoE]
+        if self.DoE is None:
+            self.DoE = np.random.permutation(self.population)[:self.n_DoE]
         values = np.array(RunModel(self.DoE, model_script=self.model).qoi_list)
         pf, cov_pf = 1, 1
         while cov_pf > self.min_cov:
             n_ = self.population.shape[0]
             n = self.DoE.shape[0]
 
-            with suppress_stdout():  # disable printing output comments
-                k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
-                         corr_model_params=self.corr_model_params, n_opt=self.n_opt)
-            tmp = k.corr_model_params
+            if self.kriging == 'UQpy':
+                with suppress_stdout():  # disable printing output comments
+                    k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
+                             corr_model_params=self.corr_model_params, n_opt=self.n_opt)
+                tmp = k.corr_model_params
+                interpolate = k.interpolate
+            else:
+                gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
+                gp.fit(self.DoE, values)
+                interpolate = gp.predict
+
+            # num = 25
+            # x1 = np.linspace(-5, 5, num)
+            # x2 = np.linspace(-5, 5, num)
+            # x1v, x2v = np.meshgrid(x1, x2)
+            # y = np.zeros([num, num])
+            # y_act = np.zeros([num, num])
+            # mse = np.zeros([num, num])
+            # for i in range(num):
+            #     for j in range(num):
+            #         y[i, j] = k.interpolate(np.array([[x1v[i, j], x2v[i, j]]]))
+            #         y_act[i, j] = np.array(RunModel(np.array([[x1v[i, j], x2v[i, j]]]), model_script=self.model).qoi_list)
+            # import matplotlib.pyplot as plt
+            # from matplotlib import cm
+            # from matplotlib.ticker import LinearLocator, FormatStrFormatter
+            # from mpl_toolkits import mplot3d
+            # fig = plt.figure()
+            # ax = plt.axes(projection='3d')
+            # # Plot for estimated values
+            # kr = ax.plot_wireframe(x1v, x2v, y, color='Green', label='Kriging interpolate')
+            # kr_a = ax.plot_wireframe(x1v, x2v, y_act, color='Black', label='Actual')
+            #
+            # # Plot for scattered data
+            # ID1 = ax.scatter(self.DoE[:, 0], self.DoE[:, 1], color='Red', label='Input data')
+            # # ID = ax.scatter(x.samples[:, 0], x.samples[:, 1], color='Red', label='Input data')
+            # plt.legend(handles=[kr, kr_a, ID1])
+            # plt.show()
 
             for i in range(n, n_, self.n_add):
-                new, ind = self.lf(k, np.array([x for x in self.population.tolist() if x not in self.DoE.tolist()]),
-                                   self.n_add)
-                print(i)
+                if i == self.n_stop:
+                    break
+                rest_pop = np.array([x for x in self.population.tolist() if x not in self.DoE.tolist()])
+                new, ind = self.lf(interpolate, rest_pop, self.n_add)
                 self.DoE = np.vstack([self.DoE, new])
 
                 v_new = np.array(RunModel(np.atleast_2d(new), model_script=self.model).qoi_list)
+                print(i)
                 values = np.vstack([values, v_new])
 
                 if ind:
                     break
-                with suppress_stdout():  # disable printing output comments
-                    k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
-                             corr_model_params=tmp)
-                tmp = k.corr_model_params
 
-            pf = np.sum(np.array(values) < 0)/n_
+                if self.kriging == 'UQpy':
+                    with suppress_stdout():  # disable printing output comments
+                        k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
+                                 corr_model_params=tmp)
+                    tmp = k.corr_model_params
+                    interpolate = k.interpolate
+                else:
+                    gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
+                    gp.fit(self.DoE, values)
+                    interpolate = gp.predict
+
+            pf = np.sum(interpolate(self.population) < 0)/n_
             print(pf)
             cov_pf = np.sqrt((1 - pf)/(pf * n_))
+            if i == self.n_stop:
+                break
             if cov_pf > self.min_cov:
-                print("Notice: Increasing total population by 20%")
+                print("Covariance of pf = ", cov_pf, "   Notice: Increasing total population by 20%")
                 m = MCS(dist_name=self.dist_name, dist_params=self.dist_params, nsamples=int(0.2*m.nsamples))
                 self.population = np.vstack([self.population, m.samples])
 
         print('Done!')
-        return values, pf, cov_pf
+        return values, pf, cov_pf, interpolate
 
     def learning(self):
         def alf(learning_function):
             def c(surr, pop, a):
                 if learning_function == 'U':
-                    g, sig = surr.interpolate(pop, dy=True)
-                    u = abs(g)/sig
-                    rows = u[:, 0].argsort()[:a]
+                    if self.kriging == 'UQpy':
+                        g, sig = surr(pop, dy=True)
+                    else:
+                        g, sig = surr(pop, return_std=True)
+                    sig[sig == 0.] = 0.00001
+                    if self.kriging == 'UQpy':
+                        u = abs(g)/sig
+                        rows = u[:, 0].argsort()[:a]
+                    else:
+                        u = abs(g.T) / sig
+                        rows = u[0, :].argsort()[:a]
+
                     indicator = False
-                    if min(u) >= 2:
+                    if min(u[0, :]) >= 2:
+                        indicator = True
+
+                    # print(g[rows])
+                    return pop[rows, :], indicator
+                if learning_function == 'Weighted-U':
+                    if self.kriging == 'UQpy':
+                        g, sig = surr(pop, dy=True)
+                    else:
+                        g, sig = surr(pop, return_std=True)
+                    sig[sig == 0.] = 0.00001
+                    if self.kriging == 'UQpy':
+                        u = abs(g)/sig
+                        rows = u[:, 0].argsort()[:a]
+                    else:
+                        u = abs(g.T) / sig
+                        rows = u[0, :].argsort()[:a]
+
+                    indicator = False
+                    if min(u[0, :]) >= 2:
+                        indicator = True
+
+                    # print(g[rows])
+                    return pop[rows, :], indicator
+                if learning_function == 'EFF':
+                    if self.kriging == 'UQpy':
+                        g, sig = surr(pop, dy=True)
+                    else:
+                        g, sig = surr(pop, return_std=True)
+                    # Reliability threshold: a = 0
+                    # EGRA method: epshilon = 2*sigma(x)
+                    a, ep  = 0, 2*sig
+                    t1 = (a - g)/sig
+                    t2 = (a - ep - g)/sig
+                    t3 = (a + ep - g)/sig
+                    eff = (g - a) * (2 * sp.norm.cdf(t1) - sp.norm.cdf(t2) - sp.norm.cdf(t3))
+                    eff += -sig*(2 * sp.norm.pdf(t1) - sp.norm.pdf(t2) - sp.norm.pdf(t3))
+                    eff += sp.norm.cdf(t2) - sp.norm.cdf(t3)
+                    rows = eff[:, 0].argsort()[-a:]
+                    indicator = False
+                    if max(u) <= 0.001:
                         indicator = True
 
                     return pop[rows, :], indicator
@@ -1160,6 +1259,12 @@ class AKMCS:
 
         if self.model is None:
             raise NotImplementedError("Exit code: Model should be defined.")
+
+        if self.DoE is None and self.n_DoE is None:
+            raise NotImplementedError("Exit code: Define either 'doe' or 'n_doe'.")
+
+        if type(self.corr_model).__name__ != 'str':
+            self.kriging = 'Sklearn'
 
 
 ########################################################################################################################

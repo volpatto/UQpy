@@ -508,10 +508,10 @@ class Krig:
         s_ = (self.samples - self.mean_s) / self.std_s
         fx, jf = self.reg_model(x)
         rx = self.corr_model(x=x, s=s_, params=self.corr_model_params)
-        y = np.einsum('ij,jk->ik', fx, self.beta) + np.einsum('ij,jk->ik', rx.T, self.gamma)
+        y = np.einsum('ij,jk->ik', fx, self.beta) + np.einsum('ij,jk->ik', rx, self.gamma)
         y = self.mean_y + y * self.std_y
         if dy:
-            r_dash = np.einsum('ij,jk->ik', self.C_inv, rx)
+            r_dash = np.einsum('ij,jk->ik', self.C_inv, rx.T)
             u = np.einsum('ij,jk->ik', self.F_dash.T, r_dash)-fx.T
             norm1 = np.sum(r_dash**2, 0)**0.5
             norm2 = np.sum(np.linalg.solve(self.G, u)**2, 0)**0.5
@@ -607,7 +607,7 @@ class Krig:
         # Defining Correlation model (Gaussian Process)
         def corr(model):
             def c(x, s, params, dt=False, dx=False):
-                rx, drdt, drdx = 0, 0, 0
+                rx, drdt, drdx = [0.], [0.], [0.]
                 x = np.atleast_2d(x)
                 # Create stack matrix, where each block is x_i with all s
                 stack = - np.tile(np.swapaxes(np.atleast_3d(x), 1, 2), (1, np.size(s, 0), 1)) + np.tile(s, (
@@ -615,12 +615,16 @@ class Krig:
                     1, 1))
                 if model == 'Exponential':
                     rx = np.exp(np.sum(-params * abs(stack), axis=2))
-                    drdt = -abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = params * np.sign(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    if dt:
+                        drdt = -abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    if dx:
+                        drdx = params * np.sign(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                 elif model == 'Gaussian':
-                    rx = np.exp(np.sum(-params * (stack ** 2), axis=2)).T
-                    drdt = -(stack ** 2) * np.tile(rx, (np.size(x, 1), 1, 1)).T
-                    drdx = 2 * params * stack * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                    rx = np.exp(np.sum(-params * (stack ** 2), axis=2))
+                    if dt:
+                        drdt = -(stack ** 2) * np.transpose(np.tile(rx, (np.size(x, 1), 1, 1)), (1, 2, 0))
+                    if dx:
+                        drdx = 2 * params * stack * np.tile(rx, (np.size(x, 1), 1, 1)).T
                 elif model == 'Linear':
                     # Taking stack and turning each d value into 1-theta*dij
                     after_parameters = 1 - params * abs(stack)
