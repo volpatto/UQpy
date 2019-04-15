@@ -618,13 +618,13 @@ class Krig:
                     if dt:
                         drdt = -abs(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
                     if dx:
-                        drdx = params * np.sign(stack) * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                        drdx = params * np.sign(stack) * np.tile(rx.T, (np.size(x, 1), 1, 1)).T
                 elif model == 'Gaussian':
                     rx = np.exp(np.sum(-params * (stack ** 2), axis=2))
                     if dt:
                         drdt = -(stack ** 2) * np.transpose(np.tile(rx, (np.size(x, 1), 1, 1)), (1, 2, 0))
                     if dx:
-                        drdx = 2 * params * stack * np.tile(rx, (np.size(x, 1), 1, 1)).T
+                        drdx = 2 * params * stack * np.transpose(np.tile(rx, (np.size(x, 1), 1, 1)), (1, 2, 0))
                 elif model == 'Linear':
                     # Taking stack and turning each d value into 1-theta*dij
                     after_parameters = 1 - params * abs(stack)
