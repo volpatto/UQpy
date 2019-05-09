@@ -408,9 +408,7 @@ class STS:
         self.input_file = input_file
         self.dist_name = dist_name
         self.dist_params = dist_params
-        self.origins = None
-        self.widths = None
-        self.weights = None
+        self.strata = None
         self.sts_criterion = sts_criterion
         self.init_sts()
 
@@ -483,70 +481,6 @@ class STS:
         # Check sampling criterion
         if self.sts_criterion not in ['random', 'centered']:
             raise NotImplementedError("Exit code: Supported sts criteria: 'random', 'centered'")
-
-    # def run_sts(self):
-    #     samples = np.empty([self.origins.shape[0], self.origins.shape[1]], dtype=np.float32)
-    #     samples_u_to_x = np.empty([self.origins.shape[0], self.origins.shape[1]], dtype=np.float32)
-    #     for j in range(0, self.origins.shape[1]):
-    #         i_cdf = self.distribution[j].icdf
-    #         if self.sts_criterion == "random":
-    #             for i in range(0, self.origins.shape[0]):
-    #                 samples[i, j] = np.random.uniform(self.origins[i, j], self.origins[i, j]
-    #                                                   + self.widths[i, j])
-    #         elif self.sts_criterion == "centered":
-    #             for i in range(0, self.origins.shape[0]):
-    #                 samples[i, j] = self.origins[i, j] + self.widths[i, j] / 2.
-    #
-    #         samples_u_to_x[:, j] = i_cdf(samples[:, j], self.dist_params[j])
-    #
-    #     print('UQpy: Successful execution of STS design..')
-    #     return samples, samples_u_to_x
-    #
-    # def init_sts(self):
-    #
-    #     # Check for dimensional consistency
-    #     if self.dimension is None and self.sts_design is not None:
-    #         self.dimension = len(self.sts_design)
-    #     elif self.sts_design is not None:
-    #         if self.dimension != len(self.sts_design):
-    #             raise NotImplementedError("Exit code: Incompatible dimensions.")
-    #     elif self.sts_design is None and self.dimension is None:
-    #         raise NotImplementedError("Exit code: Dimension must be specified.")
-    #
-    #     # Check dist_name
-    #     if type(self.dist_name).__name__ != 'list':
-    #         self.dist_name = [self.dist_name]
-    #     if len(self.dist_name) == 1 and self.dimension != 1:
-    #         self.dist_name = self.dist_name * self.dimension
-    #     elif len(self.dist_name) != self.dimension:
-    #         raise NotImplementedError("Length of i_cdf should be 1 or equal to dimension.")
-    #
-    #     # Check dist_params
-    #     if type(self.dist_params).__name__ != 'list':
-    #         self.dist_params = [self.dist_params]
-    #     if len(self.dist_params) == 1 and self.dimension != 1:
-    #         self.dist_params = self.dist_params * self.dimension
-    #     elif len(self.dist_params) != self.dimension:
-    #         raise NotImplementedError("Length of dist_params list should be 1 or equal to dimension.")
-    #
-    #     # Ensure that distribution parameters are assigned
-    #     if self.dist_params is None:
-    #         raise NotImplementedError("Exit code: Distribution parameters not defined.")
-    #
-    #     if self.sts_design is None:
-    #         if self.input_file is None:
-    #             raise NotImplementedError("Exit code: Stratum design is not defined.")
-    #         else:
-    #             self.origins, self.widths, self.weights = strata(input_file=self.input_file)
-    #     else:
-    #         if len(self.sts_design) != self.dimension:
-    #             raise NotImplementedError("Exit code: Incompatible dimensions in 'sts_design'.")
-    #         else:
-    #             self.origins, self.widths, self.weights = strata(n_strata=self.sts_design)
-    #
-    #     # Check sampling criterion
-    #     if self.sts_criterion not in ['random', 'centered']:
-    #         raise NotImplementedError("Exit code: Supported sts criteria: 'random', 'centered'")
 
 ########################################################################################################################
 ########################################################################################################################
@@ -1609,8 +1543,8 @@ class AKMCS:
     # Last modified: 03/01/2019 by Mohit S. Chauhan
 
     def __init__(self, model=None, dist_name=None, dist_params=None, nsamples=None, n_doe=None, doe=None, lf=None,
-                 corr_model='Gaussian', reg_model='Linear', corr_model_params=None, n_opt=10, n_add=2, min_cov=None,
-                 n_stop=None, max_p=None, analysis=None, population=None, domain=None, n_dom=None):
+                 corr_model='Gaussian', reg_model='Linear', corr_model_params=None, n_opt=10, n_add=1, min_cov=None,
+                 n_stop=None, max_p=None, population=None, domain=None, n_dom=None):
 
         self.model = model
         self.dist_name = dist_name
@@ -1631,7 +1565,8 @@ class AKMCS:
         self.kriging = 'UQpy'
         self.domain = np.array(domain)
         self.n_dom = np.array(n_dom)
-        self.analysis = analysis
+        self.analysis = None
+        self.strata = None
         self.init_akmcs()
         if self.analysis == 'Reliability':
             self.values, self.pf, self.cov_pf, self.pr = self.run_akmcs()
@@ -1663,7 +1598,7 @@ class AKMCS:
                     with suppress_stdout():  # disable printing output comments
                         k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
                                  corr_model_params=self.corr_model_params, n_opt=self.n_opt)
-                    tmp = k.corr_model_params
+                    self.corr_model_params = k.corr_model_params
                     interpolate = k.interpolate
                 else:
                     gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
@@ -1715,7 +1650,7 @@ class AKMCS:
                         with suppress_stdout():  # disable printing output comments
                             k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
                                      corr_model_params=tmp)
-                        tmp = k.corr_model_params
+                        self.corr_model_params = k.corr_model_params
                         interpolate = k.interpolate
                     else:
                         gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
@@ -1743,19 +1678,33 @@ class AKMCS:
                 with suppress_stdout():  # disable printing output comments
                     k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
                              corr_model_params=self.corr_model_params, n_opt=self.n_opt)
-                tmp = k.corr_model_params
+                self.corr_model_params = k.corr_model_params
                 interpolate = k.interpolate
+                jacobian = k.jacobian
             else:
                 gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
                 gp.fit(self.DoE, values)
                 interpolate = gp.predict
+                jacobian, tmp = 0, 0
+
+            if self.lf == 'mvp':
+                self.strata = Strata(n_strata=self.n_dom)
+                self.strata.origins = self.domain[:, 0] + (self.domain[:, 1]-self.domain[:, 0])*self.strata.origins
+                self.strata.widths = (self.domain[:, 1]-self.domain[:, 0]) * self.strata.widths
+                midpts = self.strata.origins + self.strata.widths/2
+            else:
+                midpts = 0
 
             for i in range(n, n_, self.n_add):
                 if i == self.n_stop:
                     break
 
                 rest_pop = np.array([x for x in self.population.tolist() if x not in self.DoE.tolist()])
-                new = self.lf(interpolate, rest_pop, self.n_add, min(values), self.DoE)
+                if self.lf == 'mvp':
+                    pop_mid = ((rest_pop / self.strata.widths[0, :]).astype(int) + 0.5) * self.strata.widths[0, :]
+                    new = self.mvp(interpolate, jacobian, rest_pop, pop_mid, midpts)
+                else:
+                    new = self.lf(interpolate, rest_pop, self.n_add, min(values), self.DoE)
                 self.DoE = np.vstack([self.DoE, new])
 
                 v_new = np.array(RunModel(np.atleast_2d(new), model_script=self.model).qoi_list)
@@ -1765,9 +1714,10 @@ class AKMCS:
                 if self.kriging == 'UQpy':
                     with suppress_stdout():  # disable printing output comments
                         k = Krig(samples=self.DoE, values=values, corr_model=self.corr_model, reg_model=self.reg_model,
-                                 corr_model_params=tmp)
-                    tmp = k.corr_model_params
+                                 corr_model_params=self.corr_model_params, n_opt=1)
+                    self.corr_model_params = k.corr_model_params
                     interpolate = k.interpolate
+                    jacobian = k.jacobian
                 else:
                     gp = GaussianProcessRegressor(kernel=self.corr_model_params, n_restarts_optimizer=0)
                     gp.fit(self.DoE, values)
@@ -1778,6 +1728,67 @@ class AKMCS:
 
         else:
             raise NotImplementedError("Exit code: 'analysis' should be 'Reliability' or 'Sensitivity'.")
+
+    def mvp(self, ip, jac, rp, rpm, mp):
+        # Maximum variance point
+        def cent_diff(f, x, h):
+            dydx = np.zeros((np.size(x, 0), np.size(x, 1)))
+            for dirr in range(np.size(x, 1)):
+                temp = np.zeros_like(x)
+                temp[:, dirr] = np.ones(np.size(x, 0))
+                low = x - h / 2 * temp
+                hi = x + h / 2 * temp
+                a = f.__call__(hi)
+                b = f.__call__(low)
+                dydx[:, dirr] = ((a - b) / h)[:, 0]
+            return dydx
+
+        if self.kriging == 'UQpy':
+            dydx = jac(mp)
+            g, sig = ip(rp, dy=True)
+        else:
+            dydx = cent_diff(ip, rpm, h=0.05)
+            g, sig = ip(rp, return_std=True)
+            sig = sig.reshape(sig.size, 1)**2
+
+        max_s, row = 0, None
+        # s1 = np.zeros([mp.shape[0], 1])
+        # k1 = np.zeros([mp.shape[0], 1])
+        for l in range(mp.shape[0]):
+            x0 = mp[l, :]
+            xk = rp[np.all(rpm == x0, axis=1)]
+            if xk.size:
+                k = np.sum(np.exp(-np.linalg.norm(self.DoE-x0, axis=1)/0.25))
+                var = np.var(xk-x0, axis=0)
+                var_k = sig[np.all(rpm == x0, axis=1)]
+                grad = dydx[l, :]
+                s = np.sum(grad * var * grad) * (1 / k) + var_k
+                ms = max(s)
+                # s1[l, 0] = ms
+                # k1[l, 0] = k
+                if ms > max_s:
+                    row = xk[np.argmax(s), :]
+                    max_s = ms
+
+        # from mpl_toolkits.mplot3d import Axes3D
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111, projection='3d')
+        # # fig.set_tight_layout(False)
+        # # ax = Axes3D(fig)
+        # ax.scatter(mp[:, 0], mp[:, 1], s1)
+        # plt.show()
+        # print('Where is the plot')
+        # print('hi')
+
+        return row
+
+        # s = np.zeros([self.nsamples, 1])
+        # for j in range(rp.shape[0]):
+        #     t = len(np.where((dydx == dydx[j, None]).all(axis=1)))
+        #     s[j, 0] = np.sum(dydx[j, :] * v[0, :] * dydx[j, :])/t + sig[j, 0]
+        #
+        # rows = s[:, 0].argsort()[-a:]
+        # return rp[rows, :]
 
     def learning(self):
         if self.lf == 'U':
@@ -1869,6 +1880,9 @@ class AKMCS:
 
                 return
 
+        else:
+            c = 'mvp'
+
         return c
 
     def init_akmcs(self):
@@ -1881,7 +1895,7 @@ class AKMCS:
 
         if type(self.lf).__name__ == 'function':
             self.lf = self.lf
-        elif self.lf in ['EFF', 'U', 'Weighted-U', 'EIF', 'New']:
+        elif self.lf in ['EFF', 'U', 'Weighted-U', 'EIF', 'New', 'mvp']:
             if self.lf in ['EFF', 'U', 'Weighted-U']:
                 self.analysis = 'Reliability'
             else:
