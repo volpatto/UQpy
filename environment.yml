@@ -9,6 +9,7 @@ dependencies:
 - numpy
 - python
 - scikit-learn
-- scipy
+- scipy =1.2
+- statsmodels
 - widgetsnbextension
 name: uqpy-py37
