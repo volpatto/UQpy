@@ -1,4 +1,3 @@
-import numpy as np
 from UQpy.Distributions import Distribution
 
 p = Distribution(dist_name=['normal', 'normal'], copula='gumbel')
