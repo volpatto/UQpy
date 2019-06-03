@@ -11,8 +11,8 @@ setup(
     author_email="UQpy.info@gmail.com",
     license='MIT',
     platforms=["OSX", "Windows", "Linux"],
-    packages=find_packages("src"),
-    package_dir={"": "src"},
+    packages=find_packages("UQpy"),
+    package_dir={"": "UQpy"},
     package_data={"": ["*.pdf"]},
     install_requires=[
         "numpy", "scipy", "matplotlib", "scikit-learn", 'fire'
