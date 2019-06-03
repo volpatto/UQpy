@@ -9,6 +9,13 @@ dependencies:
   - scikit-learn
   - scipy
 
+  # Notebook's dependencies
+  - notebook
+  - ipywidgets
+  - widgetsnbextension
+  - jupyter_contrib_nbextensions
+  - jupyter_conda
+
 environment:
   PYTHONPATH:
     - {{ root }}
